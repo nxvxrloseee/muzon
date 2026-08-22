@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Muzon",
-  "version": "0.1.0",
-  "identifier": "com.franceabsolute.muzon",
+  "version": "1.0.1",
+  "identifier": "com.nxvxrloseee.muzon",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

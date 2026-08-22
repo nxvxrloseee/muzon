@@ -1,0 +1,25 @@
+pkgbase = muzon
+	pkgdesc = Local music player built with Tauri and GStreamer
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://github.com/nxvxrloseee/muzon
+	arch = x86_64
+	license = GPL3
+	makedepends = rust
+	makedepends = cargo
+	makedepends = nodejs
+	makedepends = npm
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = gstreamer
+	depends = gst-plugins-base
+	depends = gst-plugins-good
+	depends = gst-plugins-bad
+	depends = gst-plugins-ugly
+	depends = gst-libav
+	source = muzon-1.0.0.tar.gz::https://github.com/nxvxrloseee/muzon/archive/v1.0.0.tar.gz
+	source = muzon.desktop
+	sha256sums = 6ee46b169fe3e1d30ee1c31611e947535da236fcde54559a4180bac48a71a285
+	sha256sums = 1aa81d0d072346d9dd30516ec3e802d90da12a737cd55fc5bec2e2a24a2a3738
+
+pkgname = muzon

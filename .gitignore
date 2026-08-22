@@ -26,3 +26,10 @@ dist-ssr
 # Rust / Tauri
 src-tauri/target
 src-tauri/gen
+
+# makepkg working dirs
+packaging/aur/src
+packaging/aur/pkg
+packaging/aur/*.tar.gz
+packaging/aur/*.tar.zst
+packaging/aur/*.pkg.tar.*
