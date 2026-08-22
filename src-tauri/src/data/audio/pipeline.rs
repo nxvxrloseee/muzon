@@ -117,7 +117,6 @@ struct Inner {
     volume: f64,
     crossfade_secs: f64,
     eq_gains: [f64; EQ_BAND_COUNT],
-    tempo: f64,
     crossfade: Option<CrossfadeState>,
 }
 
@@ -172,7 +171,6 @@ impl AudioPlayer {
             volume: 1.0,
             crossfade_secs: 0.0,
             eq_gains: [0.0; EQ_BAND_COUNT],
-            tempo: 1.0,
             crossfade: None,
         };
 
@@ -301,11 +299,19 @@ impl AudioPlayer {
         guard.deck_b.apply_eq(&gains);
     }
 
-    pub fn set_tempo(&self, tempo: f64) {
-        let mut guard = self.inner.lock().unwrap();
-        guard.tempo = tempo;
-        guard.deck_a.apply_tempo(tempo);
-        guard.deck_b.apply_tempo(tempo);
+    /// Applies `tempo` to whichever deck (active or pre-rolled standby) currently
+    /// has `path` loaded - a no-op if neither does. Tempo is per-track now, so
+    /// unlike EQ/volume this can no longer be applied to both decks unconditionally:
+    /// the active and standby decks may legitimately hold different tempos when
+    /// two tracks with different saved speeds are adjacent in the queue.
+    pub fn apply_tempo_for_path(&self, path: &str, tempo: f64) {
+        let guard = self.inner.lock().unwrap();
+        if guard.deck_a.path.as_deref() == Some(path) {
+            guard.deck_a.apply_tempo(tempo);
+        }
+        if guard.deck_b.path.as_deref() == Some(path) {
+            guard.deck_b.apply_tempo(tempo);
+        }
     }
 
     pub fn status(&self) -> PlaybackStatus {

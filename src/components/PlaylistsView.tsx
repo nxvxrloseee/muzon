@@ -10,6 +10,7 @@ import { usePlaylistStore } from "../store/playlistStore";
 import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
 import type { Track } from "../types";
+import { VirtualizedList } from "./VirtualizedList";
 
 function TrackRow({
   track,
@@ -214,10 +215,17 @@ export function PlaylistsView() {
               Пока нет любимых треков — отметьте их сердечком в библиотеке
             </div>
           ) : (
-            <div className="flex flex-col gap-1">
-              {favoriteTracks.map((t) => (
+            // Padding already lives on the scroll wrapper below (p-4), so no
+            // className/gap padding is needed here.
+            <VirtualizedList
+              items={favoriteTracks}
+              scrollElementRef={scrollWrapperRef}
+              estimateSize={56}
+              gap={4}
+              overscan={8}
+              getItemKey={(t) => t.id}
+              renderItem={(t) => (
                 <TrackRow
-                  key={t.id}
                   track={t}
                   draggable={false}
                   onPlay={() => setQueue(favoriteTracks, t)}
@@ -225,8 +233,8 @@ export function PlaylistsView() {
                   removeIcon={<Heart size={14} fill="currentColor" />}
                   removeTitle="Убрать из любимых"
                 />
-              ))}
-            </div>
+              )}
+            />
           )
         ) : !selected ? (
           <div className="flex h-full items-center justify-center text-text-secondary">
@@ -237,6 +245,12 @@ export function PlaylistsView() {
             Плейлист «{selected.name}» пуст — добавьте треки из библиотеки
           </div>
         ) : (
+          // Intentionally not virtualized: Reorder.Group measures every sibling
+          // Reorder.Item to compute drag targets, so windowing this list would
+          // silently break dragging to any position outside the current
+          // viewport. A single playlist is bounded by how many tracks a user
+          // adds by hand, unlike the full library or "Избранное" (already
+          // virtualized above), so this is an acceptable tradeoff.
           <Reorder.Group
             axis="y"
             values={tracks}

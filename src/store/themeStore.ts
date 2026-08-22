@@ -1,16 +1,10 @@
 import { create } from "zustand";
 import { themeApi } from "../api/theme";
+import { createDebouncedPersist } from "../lib/debouncePersist";
 import { applyThemeToDom } from "../theme/roles";
 import type { Theme } from "../types";
 
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
-
-function schedulePersist(theme: Theme) {
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    themeApi.setTheme(theme).catch((e) => console.error("Failed to save theme", e));
-  }, 300);
-}
+const themePersist = createDebouncedPersist(300);
 
 interface ThemeState {
   theme: Theme | null;
@@ -34,7 +28,9 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     const next = { ...current, [key]: value };
     applyThemeToDom(next);
     set({ theme: next });
-    schedulePersist(next);
+    themePersist.schedule(() =>
+      themeApi.setTheme(next).catch((e) => console.error("Failed to save theme", e)),
+    );
   },
   resetToDefault: async (mode) => {
     const theme = await themeApi.getDefaultTheme(mode);

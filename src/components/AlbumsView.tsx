@@ -1,12 +1,14 @@
 import { ChevronLeft, Music2 } from "lucide-react";
 import { motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useLenis } from "../hooks/useLenis";
 import { useTrackCover } from "../hooks/useTrackCover";
 import { type AlbumGroup, groupAlbums } from "../lib/trackGroups";
 import { useLibraryStore } from "../store/libraryStore";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
+import { VirtualizedList } from "./VirtualizedList";
 
 function AlbumCard({ group, onOpen }: { group: AlbumGroup; onOpen: () => void }) {
   const cover = useTrackCover(group.tracks[0]?.path);
@@ -40,46 +42,61 @@ function AlbumDetail({ group, onBack }: { group: AlbumGroup; onBack: () => void 
   const cover = useTrackCover(group.tracks[0]?.path);
   const setQueue = useQueueStore((s) => s.setQueue);
   const currentPath = usePlayerStore((s) => s.currentPath);
+  const scrollWrapperRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
+  useLenis(scrollWrapperRef, scrollContentRef);
 
   return (
-    <div className="p-4">
-      <button
-        onClick={onBack}
-        className="mb-4 flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary"
-      >
-        <ChevronLeft size={16} />
-        Все альбомы
-      </button>
+    <div className="flex h-full flex-col">
+      <div className="p-4 pb-0">
+        <button
+          onClick={onBack}
+          className="mb-4 flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary"
+        >
+          <ChevronLeft size={16} />
+          Все альбомы
+        </button>
 
-      <div className="mb-6 flex items-end gap-4">
-        <div className="flex h-32 w-32 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-card-background">
-          {cover ? (
-            <img src={cover} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Music2 size={32} className="text-text-secondary/40" />
-          )}
-        </div>
-        <div>
-          <div className="text-xl font-semibold text-text-primary">{group.album}</div>
-          <div className="text-sm text-text-secondary">{group.artist}</div>
+        <div className="mb-6 flex items-end gap-4">
+          <div className="flex h-32 w-32 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-card-background">
+            {cover ? (
+              <img src={cover} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <Music2 size={32} className="text-text-secondary/40" />
+            )}
+          </div>
+          <div>
+            <div className="text-xl font-semibold text-text-primary">{group.album}</div>
+            <div className="text-sm text-text-secondary">{group.artist}</div>
+          </div>
         </div>
       </div>
 
-      <div className="flex flex-col gap-1">
-        {group.tracks.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setQueue(group.tracks, t)}
-            className={`flex items-center gap-3 rounded-md px-3 py-2 text-left ${
-              currentPath === t.path ? "bg-card-hover" : "hover:bg-card-hover"
-            }`}
-          >
-            <span className="w-6 flex-shrink-0 text-right text-xs text-text-secondary">
-              {t.track_no ?? ""}
-            </span>
-            <span className="truncate text-sm text-text-primary">{t.title}</span>
-          </button>
-        ))}
+      <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto">
+        <div ref={scrollContentRef}>
+          <VirtualizedList
+            items={group.tracks}
+            scrollElementRef={scrollWrapperRef}
+            estimateSize={44}
+            gap={4}
+            overscan={8}
+            className="px-4 pb-4"
+            getItemKey={(t) => t.id}
+            renderItem={(t) => (
+              <button
+                onClick={() => setQueue(group.tracks, t)}
+                className={`flex items-center gap-3 rounded-md px-3 py-2 text-left ${
+                  currentPath === t.path ? "bg-card-hover" : "hover:bg-card-hover"
+                }`}
+              >
+                <span className="w-6 flex-shrink-0 text-right text-xs text-text-secondary">
+                  {t.track_no ?? ""}
+                </span>
+                <span className="truncate text-sm text-text-primary">{t.title}</span>
+              </button>
+            )}
+          />
+        </div>
       </div>
     </div>
   );

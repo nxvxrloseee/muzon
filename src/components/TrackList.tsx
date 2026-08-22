@@ -1,3 +1,4 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Check,
@@ -9,7 +10,7 @@ import {
   Pencil,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +28,7 @@ import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
 import type { Track } from "../types";
 import { TagEditor } from "./TagEditor";
+import { VirtualizedList } from "./VirtualizedList";
 
 interface TrackItemProps {
   track: Track;
@@ -91,10 +93,8 @@ function TrackCard({ track, allTracks, onEdit, selectionActive, selected, onTogg
 
   return (
     <motion.div
-      layout
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.95 }}
       whileHover={{ scale: 1.02 }}
       transition={{ type: "spring", stiffness: 350, damping: 28 }}
       className={`group relative flex flex-col gap-2 rounded-lg p-3 transition-colors ${
@@ -159,10 +159,8 @@ function TrackRow({ track, allTracks, onEdit, selectionActive, selected, onToggl
 
   return (
     <motion.div
-      layout
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
       transition={{ type: "spring", stiffness: 400, damping: 32 }}
       className={`group flex items-center gap-3 rounded-md px-3 py-2 ${
         isActive ? "bg-card-hover" : "hover:bg-card-hover"
@@ -232,6 +230,143 @@ function PlaylistDropdownItems({ trackIds }: { trackIds: number[] }) {
         ))
       )}
     </DropdownMenuContent>
+  );
+}
+
+const GRID_MIN_ITEM = 160;
+const GRID_GAP = 12; // gap-3
+const LIST_GAP = 4; // gap-1
+
+function useElementWidth(ref: RefObject<HTMLElement | null>): number {
+  const [width, setWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    const observer = new ResizeObserver((entries) => {
+      setWidth(entries[0].contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return width;
+}
+
+interface VirtualListProps {
+  tracks: Track[];
+  allTracks: Track[];
+  scrollElementRef: RefObject<HTMLDivElement | null>;
+  onEdit: (track: Track) => void;
+  selected: Set<number>;
+  selectionActive: boolean;
+  onToggleSelect: (id: number) => void;
+}
+
+function VirtualGrid({
+  tracks,
+  allTracks,
+  scrollElementRef,
+  onEdit,
+  selected,
+  selectionActive,
+  onToggleSelect,
+}: VirtualListProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const width = useElementWidth(containerRef);
+  const columns = width > 0 ? Math.max(1, Math.floor((width + GRID_GAP) / (GRID_MIN_ITEM + GRID_GAP))) : 0;
+
+  const rows = useMemo(() => {
+    if (columns === 0) return [];
+    const chunked: Track[][] = [];
+    for (let i = 0; i < tracks.length; i += columns) {
+      chunked.push(tracks.slice(i, i + columns));
+    }
+    return chunked;
+  }, [tracks, columns]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollElementRef.current,
+    estimateSize: () => 230,
+    overscan: 4,
+  });
+
+  return (
+    <div ref={containerRef} className="px-4 pt-4 pb-4">
+      {columns > 0 && (
+        <div style={{ position: "relative", height: rowVirtualizer.getTotalSize() }}>
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const row = rows[virtualRow.index];
+            return (
+              <div
+                key={virtualRow.key}
+                ref={rowVirtualizer.measureElement}
+                data-index={virtualRow.index}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualRow.start}px)`,
+                  paddingBottom: virtualRow.index < rows.length - 1 ? GRID_GAP : 0,
+                }}
+              >
+                <div
+                  className="grid gap-3"
+                  style={{ gridTemplateColumns: `repeat(${columns}, minmax(${GRID_MIN_ITEM}px, 1fr))` }}
+                >
+                  {row.map((t) => (
+                    <TrackCard
+                      key={t.id}
+                      track={t}
+                      allTracks={allTracks}
+                      onEdit={() => onEdit(t)}
+                      selectionActive={selectionActive}
+                      selected={selected.has(t.id)}
+                      onToggleSelect={() => onToggleSelect(t.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VirtualList({
+  tracks,
+  allTracks,
+  scrollElementRef,
+  onEdit,
+  selected,
+  selectionActive,
+  onToggleSelect,
+}: VirtualListProps) {
+  return (
+    <VirtualizedList
+      items={tracks}
+      scrollElementRef={scrollElementRef}
+      estimateSize={52}
+      gap={LIST_GAP}
+      overscan={8}
+      className="px-4 pt-4 pb-4"
+      getItemKey={(t) => t.id}
+      renderItem={(t) => (
+        <TrackRow
+          track={t}
+          allTracks={allTracks}
+          onEdit={() => onEdit(t)}
+          selectionActive={selectionActive}
+          selected={selected.has(t.id)}
+          onToggleSelect={() => onToggleSelect(t.id)}
+        />
+      )}
+    />
   );
 }
 
@@ -314,19 +449,16 @@ export function TrackList() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 p-4"
               >
-                {tracks.map((t) => (
-                  <TrackCard
-                    key={t.id}
-                    track={t}
-                    allTracks={tracks}
-                    onEdit={() => setEditingTrack(t)}
-                    selectionActive={selected.size > 0}
-                    selected={selected.has(t.id)}
-                    onToggleSelect={() => toggleSelect(t.id)}
-                  />
-                ))}
+                <VirtualGrid
+                  tracks={tracks}
+                  allTracks={tracks}
+                  scrollElementRef={scrollWrapperRef}
+                  onEdit={setEditingTrack}
+                  selectionActive={selected.size > 0}
+                  selected={selected}
+                  onToggleSelect={toggleSelect}
+                />
               </motion.div>
             ) : (
               <motion.div
@@ -334,19 +466,16 @@ export function TrackList() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="flex flex-col gap-1 p-4"
               >
-                {tracks.map((t) => (
-                  <TrackRow
-                    key={t.id}
-                    track={t}
-                    allTracks={tracks}
-                    onEdit={() => setEditingTrack(t)}
-                    selectionActive={selected.size > 0}
-                    selected={selected.has(t.id)}
-                    onToggleSelect={() => toggleSelect(t.id)}
-                  />
-                ))}
+                <VirtualList
+                  tracks={tracks}
+                  allTracks={tracks}
+                  scrollElementRef={scrollWrapperRef}
+                  onEdit={setEditingTrack}
+                  selectionActive={selected.size > 0}
+                  selected={selected}
+                  onToggleSelect={toggleSelect}
+                />
               </motion.div>
             )}
           </AnimatePresence>

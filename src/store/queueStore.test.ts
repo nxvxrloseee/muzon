@@ -13,8 +13,10 @@ vi.mock("../api/player", () => ({
     setNextTrack: vi.fn().mockResolvedValue(undefined),
     getPlaybackSettings: vi.fn(),
     setCrossfadeSeconds: vi.fn().mockResolvedValue(undefined),
+    saveCrossfadeSeconds: vi.fn().mockResolvedValue(undefined),
     setEqualizerBands: vi.fn().mockResolvedValue(undefined),
-    setTempo: vi.fn().mockResolvedValue(undefined),
+    previewTrackTempo: vi.fn().mockResolvedValue(undefined),
+    setTrackTempo: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -32,6 +34,7 @@ function track(id: number, title = `Track ${id}`): Track {
     duration_secs: 180,
     track_no: null,
     is_favorite: false,
+    tempo: 1,
   };
 }
 

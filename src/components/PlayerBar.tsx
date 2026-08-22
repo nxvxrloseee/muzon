@@ -6,20 +6,18 @@ import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useUiStore } from "../store/uiStore";
 import { EffectsButton } from "./EffectsButton";
+import { PlaybackProgress } from "./PlaybackProgress";
 import { QueueDrawer } from "./QueueDrawer";
 import { SleepTimerButton } from "./SleepTimerButton";
 
-function formatTime(secs: number): string {
-  if (!Number.isFinite(secs) || secs <= 0) return "0:00";
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
 export function PlayerBar() {
-  const { currentPath, isPlaying, positionSecs, durationSecs, volume, toggle, seek, setVolume } =
-    usePlayerStore();
-  const { playNext, playPrevious } = useQueueStore();
+  const currentPath = usePlayerStore((s) => s.currentPath);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const volume = usePlayerStore((s) => s.volume);
+  const toggle = usePlayerStore((s) => s.toggle);
+  const setVolume = usePlayerStore((s) => s.setVolume);
+  const playNext = useQueueStore((s) => s.playNext);
+  const playPrevious = useQueueStore((s) => s.playPrevious);
   const setView = useUiStore((s) => s.setView);
   const cover = useTrackCover(currentPath);
   const track = useCurrentTrack();
@@ -80,22 +78,11 @@ export function PlayerBar() {
         <SkipForward size={16} />
       </motion.button>
 
-      <span className="w-10 flex-shrink-0 text-right text-xs text-text-secondary">
-        {formatTime(positionSecs)}
-      </span>
-      <input
-        type="range"
-        min={0}
-        max={durationSecs || 0}
-        step={0.1}
-        value={positionSecs}
-        onChange={(e) => seek(Number(e.target.value))}
-        className="min-w-0 flex-1"
-        style={{ accentColor: "var(--color-progress-fill)" }}
+      <PlaybackProgress
+        startTimeClassName="w-10 flex-shrink-0 text-right text-xs text-text-secondary"
+        endTimeClassName="w-10 flex-shrink-0 text-xs text-text-secondary"
+        inputClassName="min-w-0 flex-1"
       />
-      <span className="w-10 flex-shrink-0 text-xs text-text-secondary">
-        {formatTime(durationSecs)}
-      </span>
 
       <input
         type="range"

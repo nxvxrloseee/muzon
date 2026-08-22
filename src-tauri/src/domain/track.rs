@@ -11,4 +11,6 @@ pub struct Track {
     pub duration_secs: Option<f64>,
     pub track_no: Option<i32>,
     pub is_favorite: bool,
+    /// Playback speed multiplier without pitch shift; 1.0 = normal.
+    pub tempo: f64,
 }

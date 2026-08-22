@@ -26,11 +26,22 @@ export const commands = {
 	setVolume: (volume: number) => __TAURI_INVOKE<null>("set_volume", { volume }),
 	stopPlayback: () => __TAURI_INVOKE<null>("stop_playback"),
 	subscribePlaybackTicks: (channel: Channel<PlaybackTick>) => __TAURI_INVOKE<void>("subscribe_playback_ticks", { channel }),
-	setNextTrack: (path: string | null) => __TAURI_INVOKE<void>("set_next_track", { path }),
+	setNextTrack: (path: string | null) => __TAURI_INVOKE<null>("set_next_track", { path }),
 	getPlaybackSettings: () => __TAURI_INVOKE<PlaybackSettings>("get_playback_settings").then((v) => (({...v,eqGains:v.eqGains.map(i=>i)}) as typeof v)),
-	setCrossfadeSeconds: (secs: number) => __TAURI_INVOKE<null>("set_crossfade_seconds", { secs }),
+	setCrossfadeSeconds: (secs: number) => __TAURI_INVOKE<void>("set_crossfade_seconds", { secs }),
+	saveCrossfadeSeconds: (secs: number) => __TAURI_INVOKE<null>("save_crossfade_seconds", { secs }),
 	setEqualizerBands: (gains: [number, number, number, number, number, number, number, number, number, number]) => __TAURI_INVOKE<null>("set_equalizer_bands", { gains: gains.map(i=>i) }),
-	setTempo: (tempo: number) => __TAURI_INVOKE<null>("set_tempo", { tempo }),
+	/**
+	 *  Applies `tempo` live to whichever deck currently holds `path` (the audible
+	 *  part of a drag) without touching the DB - called on every slider event.
+	 */
+	previewTrackTempo: (path: string, tempo: number) => __TAURI_INVOKE<void>("preview_track_tempo", { path, tempo }),
+	/**
+	 *  Persists a track's tempo to the DB - the frontend debounces this so a drag
+	 *  doesn't write on every event; `preview_track_tempo` already handled the
+	 *  live audio side immediately.
+	 */
+	setTrackTempo: (trackId: number, tempo: number) => __TAURI_INVOKE<null>("set_track_tempo", { trackId, tempo }),
 	getTheme: () => __TAURI_INVOKE<Theme>("get_theme"),
 	setTheme: (theme: Theme) => __TAURI_INVOKE<null>("set_theme", { theme }),
 	getDefaultTheme: (mode: string) => __TAURI_INVOKE<Theme>("get_default_theme", { mode }),
@@ -80,8 +91,6 @@ export type PlaybackSettings = {
 	crossfadeSecs: number,
 	/**  10-band equalizer gains in dB, roughly -24..12 each. */
 	eqGains: [number, number, number, number, number, number, number, number, number, number],
-	/**  Playback speed multiplier without pitch shift; 1.0 = normal. */
-	tempo: number,
 };
 
 export type PlaybackTick = {
@@ -143,5 +152,7 @@ export type Track = {
 	duration_secs: number | null,
 	track_no: number | null,
 	is_favorite: boolean,
+	/**  Playback speed multiplier without pitch shift; 1.0 = normal. */
+	tempo: number,
 };
 

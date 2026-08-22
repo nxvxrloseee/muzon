@@ -1,44 +1,61 @@
 import { ChevronLeft, ChevronRight, Music2 } from "lucide-react";
 import { motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useLenis } from "../hooks/useLenis";
 import { useTrackCover } from "../hooks/useTrackCover";
 import { type ArtistGroup, groupArtists } from "../lib/trackGroups";
 import { useLibraryStore } from "../store/libraryStore";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
+import { VirtualizedList } from "./VirtualizedList";
 
 function ArtistDetail({ group, onBack }: { group: ArtistGroup; onBack: () => void }) {
   const setQueue = useQueueStore((s) => s.setQueue);
   const currentPath = usePlayerStore((s) => s.currentPath);
+  const scrollWrapperRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
+  useLenis(scrollWrapperRef, scrollContentRef);
 
   return (
-    <div className="p-4">
-      <button
-        onClick={onBack}
-        className="mb-4 flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary"
-      >
-        <ChevronLeft size={16} />
-        Все исполнители
-      </button>
+    <div className="flex h-full flex-col">
+      <div className="p-4 pb-0">
+        <button
+          onClick={onBack}
+          className="mb-4 flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary"
+        >
+          <ChevronLeft size={16} />
+          Все исполнители
+        </button>
 
-      <h1 className="mb-4 text-xl font-semibold text-text-primary">{group.artist}</h1>
+        <h1 className="mb-4 text-xl font-semibold text-text-primary">{group.artist}</h1>
+      </div>
 
-      <div className="flex flex-col gap-1">
-        {group.tracks.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setQueue(group.tracks, t)}
-            className={`flex items-center justify-between gap-3 rounded-md px-3 py-2 text-left ${
-              currentPath === t.path ? "bg-card-hover" : "hover:bg-card-hover"
-            }`}
-          >
-            <span className="truncate text-sm text-text-primary">{t.title}</span>
-            <span className="flex-shrink-0 truncate text-xs text-text-secondary">
-              {t.album ?? ""}
-            </span>
-          </button>
-        ))}
+      <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto">
+        <div ref={scrollContentRef}>
+          <VirtualizedList
+            items={group.tracks}
+            scrollElementRef={scrollWrapperRef}
+            estimateSize={44}
+            gap={4}
+            overscan={8}
+            className="px-4 pb-4"
+            getItemKey={(t) => t.id}
+            renderItem={(t) => (
+              <button
+                onClick={() => setQueue(group.tracks, t)}
+                className={`flex items-center justify-between gap-3 rounded-md px-3 py-2 text-left ${
+                  currentPath === t.path ? "bg-card-hover" : "hover:bg-card-hover"
+                }`}
+              >
+                <span className="truncate text-sm text-text-primary">{t.title}</span>
+                <span className="flex-shrink-0 truncate text-xs text-text-secondary">
+                  {t.album ?? ""}
+                </span>
+              </button>
+            )}
+          />
+        </div>
       </div>
     </div>
   );

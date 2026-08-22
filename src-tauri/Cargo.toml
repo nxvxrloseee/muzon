@@ -1,6 +1,6 @@
 [package]
 name = "muzon"
-version = "1.0.1"
+version = "1.1.0"
 description = "Muzon music player"
 authors = ["nxvxrloseee"]
 edition = "2021"
@@ -38,6 +38,7 @@ rusqlite_migration = "1"
 lofty = "0.22"
 walkdir = "2"
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 mpris-server = { version = "0.10.0", features = ["tokio"] }
 specta = { version = "2.0.0-rc.25", features = ["derive"] }
 tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }

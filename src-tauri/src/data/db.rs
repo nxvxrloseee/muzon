@@ -1,5 +1,5 @@
 use crate::domain::Track;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -69,6 +69,14 @@ impl Db {
             )?;
         }
 
+        let has_tempo_column = conn.prepare("SELECT tempo FROM tracks LIMIT 1").is_ok();
+        if !has_tempo_column {
+            conn.execute(
+                "ALTER TABLE tracks ADD COLUMN tempo REAL NOT NULL DEFAULT 1.0",
+                [],
+            )?;
+        }
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -127,16 +135,54 @@ impl Db {
         Ok(())
     }
 
-    pub fn delete_track_by_path(&self, path: &str) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM tracks WHERE path = ?1", [path])?;
-        Ok(())
+    /// Commits an entire scan's worth of upserts and removals in one transaction,
+    /// instead of one autocommit per file - the scanner gathers everything first
+    /// (tag reads, mtime checks) with the connection unlocked, then hands the
+    /// whole batch here so the lock is only held for the actual writes.
+    pub fn apply_scan_results(
+        &self,
+        upserts: &[NewTrack],
+        removed_paths: &[String],
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO tracks (path, title, artist, album, duration_secs, track_no, mtime)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(path) DO UPDATE SET
+                    title = excluded.title,
+                    artist = excluded.artist,
+                    album = excluded.album,
+                    duration_secs = excluded.duration_secs,
+                    track_no = excluded.track_no,
+                    mtime = excluded.mtime",
+            )?;
+            for t in upserts {
+                stmt.execute(rusqlite::params![
+                    t.path,
+                    t.title,
+                    t.artist,
+                    t.album,
+                    t.duration_secs,
+                    t.track_no,
+                    t.mtime
+                ])?;
+            }
+        }
+        {
+            let mut stmt = tx.prepare("DELETE FROM tracks WHERE path = ?1")?;
+            for path in removed_paths {
+                stmt.execute([path])?;
+            }
+        }
+        tx.commit()
     }
 
     pub fn list_tracks(&self) -> rusqlite::Result<Vec<Track>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, path, title, artist, album, duration_secs, track_no, is_favorite
+            "SELECT id, path, title, artist, album, duration_secs, track_no, is_favorite, tempo
              FROM tracks ORDER BY artist, album, track_no, title",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -149,9 +195,30 @@ impl Db {
                 duration_secs: row.get(5)?,
                 track_no: row.get(6)?,
                 is_favorite: row.get(7)?,
+                tempo: row.get(8)?,
             })
         })?;
         rows.collect()
+    }
+
+    /// Writes the per-track saved tempo. Kept separate from `upsert_track` since
+    /// this is a user preference the scanner must never touch on rescan (same
+    /// reasoning as `is_favorite`).
+    pub fn set_track_tempo(&self, track_id: i32, tempo: f64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tracks SET tempo = ?1 WHERE id = ?2",
+            rusqlite::params![tempo, track_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn track_tempo_by_path(&self, path: &str) -> rusqlite::Result<Option<f64>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT tempo FROM tracks WHERE path = ?1", [path], |row| {
+            row.get(0)
+        })
+        .optional()
     }
 
     /// Returns the new favorite state after toggling.
@@ -207,7 +274,7 @@ impl Db {
     pub fn playlist_tracks(&self, playlist_id: i32) -> rusqlite::Result<Vec<Track>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT t.id, t.path, t.title, t.artist, t.album, t.duration_secs, t.track_no, t.is_favorite
+            "SELECT t.id, t.path, t.title, t.artist, t.album, t.duration_secs, t.track_no, t.is_favorite, t.tempo
              FROM playlist_tracks pt
              JOIN tracks t ON t.id = pt.track_id
              WHERE pt.playlist_id = ?1
@@ -223,6 +290,7 @@ impl Db {
                 duration_secs: row.get(5)?,
                 track_no: row.get(6)?,
                 is_favorite: row.get(7)?,
+                tempo: row.get(8)?,
             })
         })?;
         rows.collect()
@@ -350,6 +418,56 @@ mod tests {
     }
 
     #[test]
+    fn new_tracks_default_to_tempo_one() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_track(&sample("/a.mp3", "A", "Artist", "Album", 1))
+            .unwrap();
+        assert_eq!(db.list_tracks().unwrap()[0].tempo, 1.0);
+    }
+
+    #[test]
+    fn set_track_tempo_is_readable_by_path_and_survives_rescan() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_track(&sample("/a.mp3", "A", "Artist", "Album", 1))
+            .unwrap();
+        let id = db.list_tracks().unwrap()[0].id;
+
+        db.set_track_tempo(id, 1.25).unwrap();
+        assert_eq!(db.track_tempo_by_path("/a.mp3").unwrap(), Some(1.25));
+
+        // Same reasoning as favorites: re-scanning (e.g. a tag edit) must not
+        // reset a track's saved tempo back to the default.
+        db.upsert_track(&sample("/a.mp3", "Retitled", "Artist", "Album", 1))
+            .unwrap();
+        assert_eq!(db.list_tracks().unwrap()[0].tempo, 1.25);
+    }
+
+    #[test]
+    fn track_tempo_by_path_is_none_for_unknown_path() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.track_tempo_by_path("/missing.mp3").unwrap(), None);
+    }
+
+    #[test]
+    fn apply_scan_results_upserts_and_removes_in_one_batch() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_track(&sample("/stale.mp3", "Stale", "Artist", "Album", 1))
+            .unwrap();
+
+        db.apply_scan_results(
+            &[
+                sample("/a.mp3", "A", "Artist", "Album", 1),
+                sample("/b.mp3", "B", "Artist", "Album", 2),
+            ],
+            &["/stale.mp3".to_string()],
+        )
+        .unwrap();
+
+        let paths: Vec<String> = db.list_tracks().unwrap().into_iter().map(|t| t.path).collect();
+        assert_eq!(paths, vec!["/a.mp3", "/b.mp3"]);
+    }
+
+    #[test]
     fn delete_track_by_path_removes_only_that_row() {
         let db = Db::open_in_memory().unwrap();
         db.upsert_track(&sample("/a.mp3", "A", "Artist", "Album", 1))
@@ -357,7 +475,7 @@ mod tests {
         db.upsert_track(&sample("/b.mp3", "B", "Artist", "Album", 2))
             .unwrap();
 
-        db.delete_track_by_path("/a.mp3").unwrap();
+        db.apply_scan_results(&[], &["/a.mp3".to_string()]).unwrap();
 
         let tracks = db.list_tracks().unwrap();
         assert_eq!(tracks.len(), 1);
@@ -491,7 +609,7 @@ mod tests {
         let playlist_id = db.create_playlist("Mix").unwrap();
         db.add_track_to_playlist(playlist_id, track_id).unwrap();
 
-        db.delete_track_by_path("/a.mp3").unwrap();
+        db.apply_scan_results(&[], &["/a.mp3".to_string()]).unwrap();
 
         assert!(db.playlist_tracks(playlist_id).unwrap().is_empty());
     }

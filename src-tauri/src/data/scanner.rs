@@ -13,6 +13,10 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
 
     let known = db.known_tracks_under(root)?;
     let mut seen: HashSet<String> = HashSet::new();
+    // Gather every upsert/removal first (tag reads are the slow, file-I/O-bound
+    // part) with the DB connection untouched, then commit the whole batch in one
+    // transaction - one lock acquisition and one fsync instead of one per file.
+    let mut upserts: Vec<NewTrack> = Vec::new();
 
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
@@ -48,7 +52,7 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
         match tags::read_tags(path) {
             Ok(t) => {
                 let is_new = !known.contains_key(&path_str);
-                db.upsert_track(&NewTrack {
+                upserts.push(NewTrack {
                     path: path_str,
                     title: t.title,
                     artist: t.artist,
@@ -56,7 +60,7 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
                     duration_secs: t.duration_secs,
                     track_no: t.track_no,
                     mtime,
-                })?;
+                });
                 if is_new {
                     report.added += 1;
                 } else {
@@ -67,12 +71,14 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
         }
     }
 
-    for path in known.keys() {
-        if !seen.contains(path) {
-            db.delete_track_by_path(path)?;
-            report.removed += 1;
-        }
-    }
+    let removed: Vec<String> = known
+        .keys()
+        .filter(|p| !seen.contains(*p))
+        .cloned()
+        .collect();
+    report.removed = removed.len() as u32;
+
+    db.apply_scan_results(&upserts, &removed)?;
 
     Ok(report)
 }

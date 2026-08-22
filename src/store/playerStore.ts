@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { playerApi } from "../api/player";
+import { flushAllPendingPersists } from "../lib/debouncePersist";
 import { useQueueStore } from "./queueStore";
 import { useSleepTimerStore } from "./sleepTimerStore";
 import type { PlaybackTick, Track } from "../types";
@@ -35,6 +36,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   rawPositionSecs: 0,
   rawPositionAt: performance.now(),
   play: async (track) => {
+    // A pending debounced save (e.g. a tempo drag on the track we're leaving)
+    // must land before we move on, or it's silently dropped - the timer would
+    // still fire later, but by then the slider/track context has moved on and
+    // nothing else guarantees it wasn't pre-empted by a later `schedule()`.
+    await flushAllPendingPersists();
     await playerApi.playTrack(track.path);
     set({ currentPath: track.path });
   },

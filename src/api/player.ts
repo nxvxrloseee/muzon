@@ -17,7 +17,9 @@ export const playerApi = {
   setNextTrack: (path: string | null) => commands.setNextTrack(path),
   getPlaybackSettings: () => commands.getPlaybackSettings(),
   setCrossfadeSeconds: (secs: number) => commands.setCrossfadeSeconds(secs),
+  saveCrossfadeSeconds: (secs: number) => commands.saveCrossfadeSeconds(secs),
   setEqualizerBands: (gains: number[]) =>
     commands.setEqualizerBands(gains as unknown as Parameters<typeof commands.setEqualizerBands>[0]),
-  setTempo: (tempo: number) => commands.setTempo(tempo),
+  previewTrackTempo: (path: string, tempo: number) => commands.previewTrackTempo(path, tempo),
+  setTrackTempo: (trackId: number, tempo: number) => commands.setTrackTempo(trackId, tempo),
 };

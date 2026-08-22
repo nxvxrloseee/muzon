@@ -9,6 +9,7 @@ import { PlaylistsView } from "./components/PlaylistsView";
 import { Sidebar } from "./components/Sidebar";
 import { ThemeSettings } from "./components/ThemeSettings";
 import { TrackList } from "./components/TrackList";
+import { useFlushSettingsOnClose } from "./hooks/useFlushSettingsOnClose";
 import { useHotkeys } from "./hooks/useHotkeys";
 import { useLenis } from "./hooks/useLenis";
 import { useMprisEvents } from "./hooks/useMprisEvents";
@@ -30,6 +31,7 @@ function App() {
   useHotkeys();
   useMprisEvents();
   useLenis(mainRef, mainContentRef);
+  useFlushSettingsOnClose();
 
   useEffect(() => {
     refreshTracks();

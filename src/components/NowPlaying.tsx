@@ -1,21 +1,15 @@
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronDown, Music2, Pause, Pencil, Play } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { lyricsApi } from "../api/lyrics";
 import { useCurrentTrack } from "../hooks/useCurrentTrack";
 import { useTrackCover } from "../hooks/useTrackCover";
 import { useTrackPalette, type TrackPalette } from "../hooks/useTrackPalette";
 import { usePlayerStore } from "../store/playerStore";
 import { useUiStore } from "../store/uiStore";
-import type { Lyrics } from "../types";
+import type { LrcLine, LrcWord, Lyrics } from "../types";
 import { LrcEditor } from "./LrcEditor";
-
-function formatTime(secs: number): string {
-  if (!Number.isFinite(secs) || secs <= 0) return "0:00";
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
+import { PlaybackProgress } from "./PlaybackProgress";
 
 function paletteGradient(p: TrackPalette): string {
   return [
@@ -27,16 +21,88 @@ function paletteGradient(p: TrackPalette): string {
   ].join(", ");
 }
 
+interface TimedLine extends LrcLine {
+  endTimeSecs: number;
+}
+
+/** Subscribes to `positionSecs` itself via a narrow boolean selector, so
+ * Zustand only re-renders this one word (not the whole lyrics panel) exactly
+ * when its highlighted state actually flips. */
+function LyricWord({ word }: { word: LrcWord }) {
+  const active = usePlayerStore((s) => s.positionSecs >= word.time_secs);
+  return (
+    <span className={active ? "text-karaoke-active-word-highlight" : undefined}>{word.text}</span>
+  );
+}
+
+/** Same narrow-selector trick as `LyricWord`, one level up: only the line
+ * whose active window actually changes re-renders, instead of the whole
+ * lyrics list re-rendering on every animation frame. Also owns its own
+ * scroll-into-view, firing only when *this* line becomes active. */
+const LyricLineItem = memo(function LyricLineItem({
+  line,
+  onSeek,
+}: {
+  line: TimedLine;
+  onSeek: (secs: number) => void;
+}) {
+  const isActive = usePlayerStore(
+    (s) => s.positionSecs >= line.time_secs && s.positionSecs < line.endTimeSecs,
+  );
+  const ref = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (isActive) ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [isActive]);
+
+  return (
+    <button
+      ref={ref}
+      onClick={() => onSeek(line.time_secs)}
+      className={`rounded px-2 py-0.5 text-lg transition-colors duration-300 hover:bg-card-hover/60 ${
+        isActive ? "font-semibold text-karaoke-active-line" : "text-karaoke-inactive-line"
+      }`}
+    >
+      {line.words && line.words.length > 0
+        ? line.words.map((w, wi) => <LyricWord key={wi} word={w} />)
+        : line.text}
+    </button>
+  );
+});
+
+function LyricsPanel({ lyrics, onSeek }: { lyrics: Lyrics | null; onSeek: (secs: number) => void }) {
+  const timedLines = useMemo<TimedLine[]>(() => {
+    if (!lyrics) return [];
+    return lyrics.lines.map((line, i) => ({
+      ...line,
+      endTimeSecs: lyrics.lines[i + 1]?.time_secs ?? Infinity,
+    }));
+  }, [lyrics]);
+
+  if (!lyrics || lyrics.lines.length === 0) {
+    return <p className="text-text-secondary">Текст песни не найден (.lrc рядом с файлом)</p>;
+  }
+
+  return (
+    <>
+      {timedLines.map((line, i) => (
+        <LyricLineItem key={i} line={line} onSeek={onSeek} />
+      ))}
+    </>
+  );
+}
+
 export function NowPlaying() {
-  const { currentPath, isPlaying, positionSecs, durationSecs, toggle, seek } =
-    usePlayerStore();
+  const currentPath = usePlayerStore((s) => s.currentPath);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const toggle = usePlayerStore((s) => s.toggle);
+  const seek = usePlayerStore((s) => s.seek);
   const setView = useUiStore((s) => s.setView);
   const cover = useTrackCover(currentPath);
   const palette = useTrackPalette(cover);
   const track = useCurrentTrack();
   const [lyrics, setLyrics] = useState<Lyrics | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
-  const activeLineRef = useRef<HTMLButtonElement | null>(null);
 
   const reloadLyrics = useCallback((path: string) => {
     lyricsApi.getLyrics(path).then(setLyrics);
@@ -74,23 +140,6 @@ export function NowPlaying() {
       return { layers: nextLayers, active: nextActive };
     });
   }, [palette]);
-
-  const activeLineIndex = useMemo(() => {
-    if (!lyrics || lyrics.lines.length === 0) return -1;
-    let idx = -1;
-    for (let i = 0; i < lyrics.lines.length; i++) {
-      if (lyrics.lines[i].time_secs <= positionSecs) idx = i;
-      else break;
-    }
-    return idx;
-  }, [lyrics, positionSecs]);
-
-  useEffect(() => {
-    activeLineRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-    });
-  }, [activeLineIndex]);
 
   const title = track?.title ?? (currentPath ? "Без названия" : "Ничего не играет");
   const artist = track?.artist ?? "";
@@ -150,18 +199,7 @@ export function NowPlaying() {
               {isPlaying ? <Pause size={20} /> : <Play size={20} />}
             </motion.button>
             <div className="flex w-full items-center gap-2 text-xs text-text-secondary">
-              <span>{formatTime(positionSecs)}</span>
-              <input
-                type="range"
-                min={0}
-                max={durationSecs || 0}
-                step={0.1}
-                value={positionSecs}
-                onChange={(e) => seek(Number(e.target.value))}
-                className="flex-1"
-                style={{ accentColor: "var(--color-progress-fill)" }}
-              />
-              <span>{formatTime(durationSecs)}</span>
+              <PlaybackProgress inputClassName="flex-1" />
             </div>
           </div>
 
@@ -175,39 +213,7 @@ export function NowPlaying() {
               Редактировать текст
             </button>
 
-            {!lyrics || lyrics.lines.length === 0 ? (
-              <p className="text-text-secondary">
-                Текст песни не найден (.lrc рядом с файлом)
-              </p>
-            ) : (
-              lyrics.lines.map((line, i) => (
-                <button
-                  key={i}
-                  ref={i === activeLineIndex ? activeLineRef : undefined}
-                  onClick={() => seek(line.time_secs)}
-                  className={`rounded px-2 py-0.5 text-lg transition-colors duration-300 hover:bg-card-hover/60 ${
-                    i === activeLineIndex
-                      ? "font-semibold text-karaoke-active-line"
-                      : "text-karaoke-inactive-line"
-                  }`}
-                >
-                  {line.words && line.words.length > 0
-                    ? line.words.map((w, wi) => (
-                        <span
-                          key={wi}
-                          className={
-                            w.time_secs <= positionSecs
-                              ? "text-karaoke-active-word-highlight"
-                              : undefined
-                          }
-                        >
-                          {w.text}
-                        </span>
-                      ))
-                    : line.text}
-                </button>
-              ))
-            )}
+            <LyricsPanel lyrics={lyrics} onSeek={seek} />
           </div>
         </div>
       </div>

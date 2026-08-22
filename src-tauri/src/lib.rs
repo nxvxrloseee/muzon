@@ -45,8 +45,10 @@ pub fn run() {
         commands::player::set_next_track,
         commands::player::get_playback_settings,
         commands::player::set_crossfade_seconds,
+        commands::player::save_crossfade_seconds,
         commands::player::set_equalizer_bands,
-        commands::player::set_tempo,
+        commands::player::preview_track_tempo,
+        commands::player::set_track_tempo,
         commands::theme::get_theme,
         commands::theme::set_theme,
         commands::theme::get_default_theme,
@@ -91,7 +93,6 @@ pub fn run() {
             let playback_settings = playback_settings_store.load_or_default();
             player.set_crossfade_seconds(playback_settings.crossfade_secs);
             player.set_equalizer_bands(playback_settings.eq_gains);
-            player.set_tempo(playback_settings.tempo);
 
             app.manage(AppState {
                 db,

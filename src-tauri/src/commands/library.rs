@@ -1,15 +1,12 @@
 use crate::data::covers;
 use crate::domain::{library, Track};
 use crate::state::AppState;
-use tauri::State;
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
 #[specta::specta]
-pub async fn add_music_folder(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<library::ScanReport, String> {
+pub async fn add_music_folder(app: tauri::AppHandle) -> Result<library::ScanReport, String> {
     // The blocking dialog API (`blocking_pick_folder`) crashes this app's GTK backend
     // when called from a tauri command thread against our undecorated/transparent
     // window; the async callback API avoids that reentrant-dialog codepath.
@@ -23,7 +20,18 @@ pub async fn add_music_folder(
         return Ok(library::ScanReport::default());
     };
     let path_buf = path.into_path().map_err(|e| e.to_string())?;
-    library::add_root_and_scan(&state.db, &path_buf).map_err(|e| e.to_string())
+
+    // Walking the folder tree, reading tags off every file, and writing them to
+    // the DB is blocking work; on Linux/webkitgtk this command's IPC dispatch
+    // runs on the GTK main thread, so this would otherwise freeze the whole UI
+    // for the duration of the scan (same class of bug fixed for cover art).
+    let app_handle = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        library::add_root_and_scan(&state.db, &path_buf).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -34,17 +42,24 @@ pub fn get_tracks(state: State<AppState>) -> Result<Vec<Track>, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_track_cover(state: State<AppState>, path: String) -> Option<String> {
+pub async fn get_track_cover(state: State<'_, AppState>, path: String) -> Result<Option<String>, ()> {
     if let Some(cached) = state.cover_cache.lock().unwrap().get(&path) {
-        return cached.clone();
+        return Ok(cached.clone());
     }
-    let result = covers::read_cover_data_url(std::path::Path::new(&path));
+    // Custom URI-scheme IPC on Linux/webkitgtk runs sync commands on the GTK
+    // main thread; decoding/resizing cover art there would freeze the whole UI.
+    let cover_path = path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        covers::read_cover_data_url(std::path::Path::new(&cover_path))
+    })
+    .await
+    .unwrap_or(None);
     state
         .cover_cache
         .lock()
         .unwrap()
         .insert(path, result.clone());
-    result
+    Ok(result)
 }
 
 #[tauri::command]

@@ -1,7 +1,10 @@
 use base64::Engine;
 use lofty::file::TaggedFileExt;
 use lofty::probe::Probe;
+use std::io::Cursor;
 use std::path::Path;
+
+const THUMBNAIL_MAX_DIM: u32 = 200;
 
 const FOLDER_COVER_NAMES: &[&str] = &[
     "cover.jpg",
@@ -16,7 +19,30 @@ const FOLDER_COVER_NAMES: &[&str] = &[
 
 pub fn read_cover_data_url(path: &Path) -> Option<String> {
     let (mime, bytes) = read_embedded_cover(path).or_else(|| read_folder_cover(path))?;
+    let (mime, bytes) = downscale_cover(&bytes).unwrap_or((mime, bytes));
     Some(to_data_url(&mime, &bytes))
+}
+
+fn downscale_cover(bytes: &[u8]) -> Option<(String, Vec<u8>)> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let thumb = if img.width() > THUMBNAIL_MAX_DIM || img.height() > THUMBNAIL_MAX_DIM {
+        img.thumbnail(THUMBNAIL_MAX_DIM, THUMBNAIL_MAX_DIM)
+    } else {
+        img
+    };
+
+    let mut out = Vec::new();
+    if thumb.color().has_alpha() {
+        thumb
+            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+            .ok()?;
+        Some(("image/png".to_string(), out))
+    } else {
+        let rgb = thumb.to_rgb8();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85);
+        encoder.encode_image(&rgb).ok()?;
+        Some(("image/jpeg".to_string(), out))
+    }
 }
 
 fn read_embedded_cover(path: &Path) -> Option<(String, Vec<u8>)> {

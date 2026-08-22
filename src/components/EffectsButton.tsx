@@ -1,5 +1,7 @@
 import { SlidersHorizontal } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useCurrentTrack } from "../hooks/useCurrentTrack";
+import { useLibraryStore } from "../store/libraryStore";
 import {
   EQ_BAND_FREQS_HZ,
   usePlaybackSettingsStore,
@@ -25,16 +27,10 @@ function pctFromBottom(gain: number): number {
 
 export function EffectsButton() {
   const [open, setOpen] = useState(false);
-  const {
-    crossfadeSecs,
-    eqGains,
-    tempo,
-    init,
-    setCrossfadeSecs,
-    setEqGains,
-    setEqBand,
-    setTempo,
-  } = usePlaybackSettingsStore();
+  const { crossfadeSecs, eqGains, init, setCrossfadeSecs, setEqGains, setEqBand } =
+    usePlaybackSettingsStore();
+  const track = useCurrentTrack();
+  const setTrackTempo = useLibraryStore((s) => s.setTrackTempo);
 
   useEffect(() => {
     init();
@@ -111,16 +107,17 @@ export function EffectsButton() {
             <div>
               <div className="mb-1 flex justify-between text-xs text-text-secondary">
                 <span>Скорость</span>
-                <span>{tempo.toFixed(2)}x</span>
+                <span>{(track?.tempo ?? 1).toFixed(2)}x</span>
               </div>
               <input
                 type="range"
                 min={0.5}
                 max={2}
                 step={0.05}
-                value={tempo}
-                onChange={(e) => setTempo(Number(e.target.value))}
-                className="w-full"
+                value={track?.tempo ?? 1}
+                disabled={!track}
+                onChange={(e) => track && setTrackTempo(track.id, Number(e.target.value))}
+                className="w-full disabled:opacity-40"
                 style={{ accentColor: "var(--color-accent-primary)" }}
               />
             </div>

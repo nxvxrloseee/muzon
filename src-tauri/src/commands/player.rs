@@ -7,7 +7,14 @@ use tauri::State;
 #[tauri::command]
 #[specta::specta]
 pub fn play_track(state: State<AppState>, path: String) -> Result<(), String> {
-    state.player.load_and_play(&path).map_err(|e| e.to_string())
+    state.player.load_and_play(&path).map_err(|e| e.to_string())?;
+    let tempo = state
+        .db
+        .track_tempo_by_path(&path)
+        .map_err(|e| e.to_string())?
+        .unwrap_or(1.0);
+    state.player.apply_tempo_for_path(&path, tempo);
+    Ok(())
 }
 
 #[tauri::command]
@@ -53,8 +60,20 @@ pub fn subscribe_playback_ticks(state: State<AppState>, channel: Channel<Playbac
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_next_track(state: State<AppState>, path: Option<String>) {
-    state.player.set_next_track(path);
+pub fn set_next_track(state: State<AppState>, path: Option<String>) -> Result<(), String> {
+    state.player.set_next_track(path.clone());
+    if let Some(next) = path {
+        // Pre-apply the next track's saved tempo to the standby deck right away,
+        // so it's already correct by the time a gapless/crossfade switch lands -
+        // otherwise the tempo would visibly/audibly jump mid-transition.
+        let tempo = state
+            .db
+            .track_tempo_by_path(&next)
+            .map_err(|e| e.to_string())?
+            .unwrap_or(1.0);
+        state.player.apply_tempo_for_path(&next, tempo);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -65,8 +84,15 @@ pub fn get_playback_settings(state: State<AppState>) -> PlaybackSettings {
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_crossfade_seconds(state: State<AppState>, secs: f64) -> Result<(), String> {
+pub fn set_crossfade_seconds(state: State<AppState>, secs: f64) {
+    // In-memory only, cheap - safe to call on every slider drag event. The
+    // frontend debounces the actual disk write via `save_crossfade_seconds`.
     state.player.set_crossfade_seconds(secs);
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn save_crossfade_seconds(state: State<AppState>, secs: f64) -> Result<(), String> {
     let mut settings = state.playback_settings_store.load_or_default();
     settings.crossfade_secs = secs;
     state
@@ -87,14 +113,22 @@ pub fn set_equalizer_bands(state: State<AppState>, gains: [f64; EQ_BAND_COUNT]) 
         .map_err(|e| e.to_string())
 }
 
+/// Applies `tempo` live to whichever deck currently holds `path` (the audible
+/// part of a drag) without touching the DB - called on every slider event.
 #[tauri::command]
 #[specta::specta]
-pub fn set_tempo(state: State<AppState>, tempo: f64) -> Result<(), String> {
-    state.player.set_tempo(tempo);
-    let mut settings = state.playback_settings_store.load_or_default();
-    settings.tempo = tempo;
+pub fn preview_track_tempo(state: State<AppState>, path: String, tempo: f64) {
+    state.player.apply_tempo_for_path(&path, tempo);
+}
+
+/// Persists a track's tempo to the DB - the frontend debounces this so a drag
+/// doesn't write on every event; `preview_track_tempo` already handled the
+/// live audio side immediately.
+#[tauri::command]
+#[specta::specta]
+pub fn set_track_tempo(state: State<AppState>, track_id: i32, tempo: f64) -> Result<(), String> {
     state
-        .playback_settings_store
-        .save(&settings)
+        .db
+        .set_track_tempo(track_id, tempo)
         .map_err(|e| e.to_string())
 }
