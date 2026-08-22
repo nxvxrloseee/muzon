@@ -26,11 +26,18 @@ source=(
   "$pkgname-$pkgver.tar.gz::https://github.com/nxvxrloseee/muzon/archive/v$pkgver.tar.gz"
   "$pkgname.desktop"
 )
-sha256sums=('SKIP'
-            'SKIP')
+sha256sums=('2a8097b9e23024721db0973fd7583eb6ded59ef1f3eacfd7b5b0b7d9693a232e'
+            '1aa81d0d072346d9dd30516ec3e802d90da12a737cd55fc5bec2e2a24a2a3738')
 
 build() {
   cd "$pkgname-$pkgver"
+  # Arch's default CFLAGS enable GCC LTO, which produces fat-LTO objects for the
+  # bundled sqlite3.c (compiled via the `cc` crate). The final Rust link step uses
+  # lld, which can't consume GCC's LTO bytecode format, so libsqlite3.a silently
+  # contributes no real symbols and the link fails with "undefined symbol:
+  # sqlite3_*". Strip LTO for this build only.
+  export CFLAGS="${CFLAGS//-flto=auto/}"
+  export CXXFLAGS="${CXXFLAGS//-flto=auto/}"
   npm ci
   npm run tauri build -- --no-bundle
 }
