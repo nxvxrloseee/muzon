@@ -1,0 +1,113 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@theme {
+  --color-background: #0b0b0f;
+  --color-sidebar-background: #111116;
+  --color-player-bar-background: #15151b;
+  --color-card-background: #1a1a21;
+  --color-card-hover: #232330;
+  --color-accent-primary: #7c5cff;
+  --color-accent-secondary: #ff5c8a;
+  --color-text-primary: #f2f2f5;
+  --color-text-secondary: #9a9aa5;
+  --color-divider: #26262f;
+  --color-progress-track: #2a2a33;
+  --color-progress-fill: #7c5cff;
+  --color-karaoke-inactive-line: #6b6b76;
+  --color-karaoke-active-line: #f2f2f5;
+  --color-karaoke-active-word-highlight: #7c5cff;
+
+  --font-sans: "Geist Variable", system-ui, -apple-system, sans-serif;
+
+  /* Unified spacing/radius/shadow scale (Tailwind config, not ad hoc values). */
+  --radius: 0.75rem;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.15);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.4);
+  --shadow-glow: 0 0 40px -8px var(--color-accent-primary);
+}
+
+/*
+ * shadcn/ui (Base UI) components are themed through these standard token
+ * names. Rather than keep a second parallel palette, alias every one of them
+ * onto our own `--color-*` roles above, which are the single source of truth
+ * driven live by the theme store - so Base UI primitives inherit user
+ * customization automatically instead of needing their own color pickers.
+ */
+@theme inline {
+  --color-foreground: var(--color-text-primary);
+  --color-card: var(--color-card-background);
+  --color-card-foreground: var(--color-text-primary);
+  --color-popover: var(--color-card-background);
+  --color-popover-foreground: var(--color-text-primary);
+  --color-primary: var(--color-accent-primary);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--color-card-hover);
+  --color-secondary-foreground: var(--color-text-primary);
+  --color-muted: var(--color-card-background);
+  --color-muted-foreground: var(--color-text-secondary);
+  --color-accent: var(--color-card-hover);
+  --color-accent-foreground: var(--color-text-primary);
+  --color-destructive: #ef4444;
+  --color-border: var(--color-divider);
+  --color-input: var(--color-divider);
+  --color-ring: var(--color-accent-primary);
+  --color-sidebar: var(--color-sidebar-background);
+  --color-sidebar-foreground: var(--color-text-primary);
+  --color-sidebar-primary: var(--color-accent-primary);
+  --color-sidebar-primary-foreground: #ffffff;
+  --color-sidebar-accent: var(--color-card-hover);
+  --color-sidebar-accent-foreground: var(--color-text-primary);
+  --color-sidebar-border: var(--color-divider);
+  --color-sidebar-ring: var(--color-accent-primary);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* thin, theme-colored scrollbar for library/playlist lists */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-divider) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-divider);
+  border-radius: 9999px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}

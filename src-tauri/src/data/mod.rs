@@ -1,0 +1,11 @@
+pub mod audio;
+pub mod covers;
+pub mod db;
+pub mod hotkeys_store;
+pub mod lrc_source;
+pub mod mpris;
+pub mod playback_settings_store;
+pub mod scanner;
+pub mod tag_writer;
+pub mod tags;
+pub mod theme_store;
