@@ -30,6 +30,7 @@ pub fn run() {
         commands::library::add_music_folder,
         commands::library::get_tracks,
         commands::library::get_track_cover,
+        commands::library::get_track_palette,
         commands::library::update_track_tags,
         commands::library::toggle_favorite,
         commands::lyrics::get_lyrics,
@@ -74,6 +75,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol(
+            data::cover_protocol::SCHEME,
+            data::cover_protocol::handle,
+        )
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);

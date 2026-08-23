@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { lyricsApi } from "../api/lyrics";
+import { playbackClock, usePlaybackPosition } from "../store/playbackClock";
 import { usePlayerStore } from "../store/playerStore";
 import type { Track } from "../types";
 
@@ -37,7 +38,12 @@ export function LrcEditor({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { positionSecs, isPlaying, toggle, play } = usePlayerStore();
+  // 0.1s is the finest the label below actually shows; subscribing to the raw
+  // clock would re-render the whole editor on every animation frame.
+  const positionSecs = usePlaybackPosition(0.1);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const toggle = usePlayerStore((s) => s.toggle);
+  const play = usePlayerStore((s) => s.play);
   const [mode, setMode] = useState<"text" | "tap">("text");
   const [text, setText] = useState("");
   const [tapLines, setTapLines] = useState<string[]>([]);
@@ -64,7 +70,7 @@ export function LrcEditor({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, tapIndex, tapLines, positionSecs]);
+  }, [mode, tapIndex, tapLines]);
 
   function startTapMode() {
     const lines = text
@@ -80,7 +86,9 @@ export function LrcEditor({
   function tapCurrentLine() {
     setTapIndex((i) => {
       if (i >= tapLines.length) return i;
-      setTapStamped((prev) => [...prev, { time: positionSecs, text: tapLines[i] }]);
+      // Read the clock directly rather than the throttled render value, so a
+      // tap is stamped with the exact position it happened at.
+      setTapStamped((prev) => [...prev, { time: playbackClock.get(), text: tapLines[i] }]);
       return i + 1;
     });
   }

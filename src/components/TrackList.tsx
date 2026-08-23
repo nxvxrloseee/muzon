@@ -1,26 +1,23 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatePresence, motion } from "motion/react";
+import { Check, Heart, LayoutGrid, List, ListPlus, Pencil, X } from "lucide-react";
 import {
-  Check,
-  Heart,
-  LayoutGrid,
-  List,
-  ListPlus,
-  Music2,
-  Pencil,
-  X,
-} from "lucide-react";
-import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+  memo,
+  type RefObject,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useLenis } from "../hooks/useLenis";
 import { useLibraryViewMode } from "../hooks/useLibraryViewMode";
-import { useTrackCover } from "../hooks/useTrackCover";
-import { trackMatchesQuery } from "../lib/trackSearch";
+import { filterTracks } from "../lib/trackSearch";
 import { useLibraryStore } from "../store/libraryStore";
 import { usePlayerStore } from "../store/playerStore";
 import { usePlaylistStore } from "../store/playlistStore";
@@ -28,18 +25,23 @@ import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
 import type { Track } from "../types";
 import { TagEditor } from "./TagEditor";
+import { TrackCover } from "./TrackCover";
+import { VirtualizedGrid } from "./VirtualizedGrid";
 import { VirtualizedList } from "./VirtualizedList";
 
+/** Every callback here is stable across renders and the row passes its own
+ * track/id back in, so `memo` can actually hold: re-rendering the list no
+ * longer re-renders every visible row. */
 interface TrackItemProps {
   track: Track;
-  allTracks: Track[];
-  onEdit: () => void;
+  onPlay: (track: Track) => void;
+  onEdit: (track: Track) => void;
   selectionActive: boolean;
   selected: boolean;
-  onToggleSelect: () => void;
+  onToggleSelect: (id: number) => void;
 }
 
-function TrackActions({ track, onEdit }: { track: Track; onEdit: () => void }) {
+function TrackActions({ track, onEdit }: { track: Track; onEdit: (track: Track) => void }) {
   const toggleFavorite = useLibraryStore((s) => s.toggleFavorite);
 
   return (
@@ -74,7 +76,7 @@ function TrackActions({ track, onEdit }: { track: Track; onEdit: () => void }) {
       <button
         onClick={(e) => {
           e.stopPropagation();
-          onEdit();
+          onEdit(track);
         }}
         className="flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
         title="Редактировать тег"
@@ -85,26 +87,30 @@ function TrackActions({ track, onEdit }: { track: Track; onEdit: () => void }) {
   );
 }
 
-function TrackCard({ track, allTracks, onEdit, selectionActive, selected, onToggleSelect }: TrackItemProps) {
-  const cover = useTrackCover(track.path);
-  const setQueue = useQueueStore((s) => s.setQueue);
+const TrackCard = memo(function TrackCard({
+  track,
+  onPlay,
+  onEdit,
+  selectionActive,
+  selected,
+  onToggleSelect,
+}: TrackItemProps) {
   const currentPath = usePlayerStore((s) => s.currentPath);
   const isActive = currentPath === track.path;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      whileHover={{ scale: 1.02 }}
-      transition={{ type: "spring", stiffness: 350, damping: 28 }}
-      className={`group relative flex flex-col gap-2 rounded-lg p-3 transition-colors ${
+    // Hover scaling as a CSS transition rather than a Motion spring: in a
+    // windowed list every row that scrolls into view would otherwise mount an
+    // animation, and the entrance spring ran on each of them mid-scroll.
+    <div
+      className={`group relative flex flex-col gap-2 rounded-lg p-3 transition-[background-color,transform] duration-150 hover:scale-[1.02] ${
         isActive ? "bg-card-hover" : "hover:bg-card-hover"
       }`}
     >
       <button
         onClick={(e) => {
           e.stopPropagation();
-          onToggleSelect();
+          onToggleSelect(track.id);
         }}
         className={`absolute left-4 top-4 z-10 flex h-6 w-6 items-center justify-center rounded-full border transition-opacity ${
           selected
@@ -121,18 +127,14 @@ function TrackCard({ track, allTracks, onEdit, selectionActive, selected, onTogg
       </div>
 
       <button
-        onClick={() => (selectionActive ? onToggleSelect() : setQueue(allTracks, track))}
+        onClick={() => (selectionActive ? onToggleSelect(track.id) : onPlay(track))}
         className="flex flex-col gap-2 text-left"
       >
-        <div className="aspect-square w-full overflow-hidden rounded-md bg-card-background shadow-md">
-          {cover ? (
-            <img src={cover} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center text-text-secondary/40">
-              <Music2 size={28} />
-            </div>
-          )}
-        </div>
+        <TrackCover
+          path={track.path}
+          iconSize={28}
+          className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-md bg-card-background shadow-md"
+        />
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-text-primary">{track.title}</div>
           <div className="truncate text-xs text-text-secondary">
@@ -140,9 +142,9 @@ function TrackCard({ track, allTracks, onEdit, selectionActive, selected, onTogg
           </div>
         </div>
       </button>
-    </motion.div>
+    </div>
   );
-}
+});
 
 function formatDuration(secs: number | null): string {
   if (secs == null) return "--:--";
@@ -151,23 +153,27 @@ function formatDuration(secs: number | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function TrackRow({ track, allTracks, onEdit, selectionActive, selected, onToggleSelect }: TrackItemProps) {
-  const cover = useTrackCover(track.path);
-  const setQueue = useQueueStore((s) => s.setQueue);
+const TrackRow = memo(function TrackRow({
+  track,
+  onPlay,
+  onEdit,
+  selectionActive,
+  selected,
+  onToggleSelect,
+}: TrackItemProps) {
   const currentPath = usePlayerStore((s) => s.currentPath);
   const isActive = currentPath === track.path;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", stiffness: 400, damping: 32 }}
-      className={`group flex items-center gap-3 rounded-md px-3 py-2 ${
+    // No entrance animation: rows mount continuously while scrolling, so this
+    // ran a spring per row per scroll rather than once per list.
+    <div
+      className={`group flex items-center gap-3 rounded-md px-3 py-2 transition-colors ${
         isActive ? "bg-card-hover" : "hover:bg-card-hover"
       }`}
     >
       <button
-        onClick={() => onToggleSelect()}
+        onClick={() => onToggleSelect(track.id)}
         className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border transition-opacity ${
           selected
             ? "border-accent-primary bg-accent-primary text-white opacity-100"
@@ -178,16 +184,13 @@ function TrackRow({ track, allTracks, onEdit, selectionActive, selected, onToggl
       </button>
 
       <button
-        onClick={() => (selectionActive ? onToggleSelect() : setQueue(allTracks, track))}
+        onClick={() => (selectionActive ? onToggleSelect(track.id) : onPlay(track))}
         className="flex flex-1 items-center gap-3 overflow-hidden text-left"
       >
-        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-background">
-          {cover ? (
-            <img src={cover} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Music2 size={16} className="text-text-secondary/40" />
-          )}
-        </div>
+        <TrackCover
+          path={track.path}
+          className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-background"
+        />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm text-text-primary">{track.title}</div>
           <div className="truncate text-xs text-text-secondary">
@@ -205,9 +208,9 @@ function TrackRow({ track, allTracks, onEdit, selectionActive, selected, onToggl
       <div className="opacity-0 transition-opacity group-hover:opacity-100">
         <TrackActions track={track} onEdit={onEdit} />
       </div>
-    </motion.div>
+    </div>
   );
-}
+});
 
 function PlaylistDropdownItems({ trackIds }: { trackIds: number[] }) {
   const playlists = usePlaylistStore((s) => s.playlists);
@@ -237,27 +240,10 @@ const GRID_MIN_ITEM = 160;
 const GRID_GAP = 12; // gap-3
 const LIST_GAP = 4; // gap-1
 
-function useElementWidth(ref: RefObject<HTMLElement | null>): number {
-  const [width, setWidth] = useState(0);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    setWidth(el.clientWidth);
-    const observer = new ResizeObserver((entries) => {
-      setWidth(entries[0].contentRect.width);
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [ref]);
-
-  return width;
-}
-
 interface VirtualListProps {
   tracks: Track[];
-  allTracks: Track[];
   scrollElementRef: RefObject<HTMLDivElement | null>;
+  onPlay: (track: Track) => void;
   onEdit: (track: Track) => void;
   selected: Set<number>;
   selectionActive: boolean;
@@ -266,82 +252,40 @@ interface VirtualListProps {
 
 function VirtualGrid({
   tracks,
-  allTracks,
   scrollElementRef,
+  onPlay,
   onEdit,
   selected,
   selectionActive,
   onToggleSelect,
 }: VirtualListProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const width = useElementWidth(containerRef);
-  const columns = width > 0 ? Math.max(1, Math.floor((width + GRID_GAP) / (GRID_MIN_ITEM + GRID_GAP))) : 0;
-
-  const rows = useMemo(() => {
-    if (columns === 0) return [];
-    const chunked: Track[][] = [];
-    for (let i = 0; i < tracks.length; i += columns) {
-      chunked.push(tracks.slice(i, i + columns));
-    }
-    return chunked;
-  }, [tracks, columns]);
-
-  const rowVirtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => 230,
-    overscan: 4,
-  });
-
   return (
-    <div ref={containerRef} className="px-4 pt-4 pb-4">
-      {columns > 0 && (
-        <div style={{ position: "relative", height: rowVirtualizer.getTotalSize() }}>
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-            const row = rows[virtualRow.index];
-            return (
-              <div
-                key={virtualRow.key}
-                ref={rowVirtualizer.measureElement}
-                data-index={virtualRow.index}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${virtualRow.start}px)`,
-                  paddingBottom: virtualRow.index < rows.length - 1 ? GRID_GAP : 0,
-                }}
-              >
-                <div
-                  className="grid gap-3"
-                  style={{ gridTemplateColumns: `repeat(${columns}, minmax(${GRID_MIN_ITEM}px, 1fr))` }}
-                >
-                  {row.map((t) => (
-                    <TrackCard
-                      key={t.id}
-                      track={t}
-                      allTracks={allTracks}
-                      onEdit={() => onEdit(t)}
-                      selectionActive={selectionActive}
-                      selected={selected.has(t.id)}
-                      onToggleSelect={() => onToggleSelect(t.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+    <VirtualizedGrid
+      items={tracks}
+      scrollElementRef={scrollElementRef}
+      minItemWidth={GRID_MIN_ITEM}
+      estimateRowHeight={230}
+      gap={GRID_GAP}
+      className="px-4 pt-4 pb-4"
+      getItemKey={(t) => t.id}
+      renderItem={(t) => (
+        <TrackCard
+          track={t}
+          onPlay={onPlay}
+          onEdit={onEdit}
+          selectionActive={selectionActive}
+          selected={selected.has(t.id)}
+          onToggleSelect={onToggleSelect}
+        />
       )}
-    </div>
+    />
   );
 }
 
 function VirtualList({
   tracks,
-  allTracks,
   scrollElementRef,
+  onPlay,
   onEdit,
   selected,
   selectionActive,
@@ -359,11 +303,11 @@ function VirtualList({
       renderItem={(t) => (
         <TrackRow
           track={t}
-          allTracks={allTracks}
-          onEdit={() => onEdit(t)}
+          onPlay={onPlay}
+          onEdit={onEdit}
           selectionActive={selectionActive}
           selected={selected.has(t.id)}
-          onToggleSelect={() => onToggleSelect(t.id)}
+          onToggleSelect={onToggleSelect}
         />
       )}
     />
@@ -378,26 +322,37 @@ export function TrackList() {
   const [editingTrack, setEditingTrack] = useState<Track | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
-  const scrollContentRef = useRef<HTMLDivElement>(null);
-  useLenis(scrollWrapperRef, scrollContentRef);
 
-  const tracks = useMemo(
-    () => allTracks.filter((t) => trackMatchesQuery(t, query)),
-    [allTracks, query],
-  );
+  // Deferred so typing stays responsive: filtering a large library is the
+  // expensive part of a keystroke, and React can keep the input painted while
+  // the list catches up.
+  const deferredQuery = useDeferredValue(query);
+  const tracks = useMemo(() => filterTracks(allTracks, deferredQuery), [allTracks, deferredQuery]);
 
   useEffect(() => {
     refreshPlaylists();
   }, [refreshPlaylists]);
 
-  function toggleSelect(id: number) {
+  const toggleSelect = useCallback((id: number) => {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  }, []);
+
+  // Reads the list to queue at click time instead of taking it as a prop, so
+  // rows don't get a new prop identity every time the library array changes.
+  const handlePlay = useCallback((track: Track) => {
+    const visible = filterTracks(
+      useLibraryStore.getState().tracks,
+      useSearchStore.getState().query,
+    );
+    useQueueStore.getState().setQueue(visible, track);
+  }, []);
+
+  const handleEdit = useCallback((track: Track) => setEditingTrack(track), []);
 
   if (allTracks.length === 0) {
     return (
@@ -435,8 +390,8 @@ export function TrackList() {
         </div>
       </div>
 
-      <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto">
-        <div ref={scrollContentRef}>
+      <div ref={scrollWrapperRef} data-lenis-prevent className="flex-1 overflow-y-auto">
+        <div>
         {tracks.length === 0 ? (
           <div className="flex h-full items-center justify-center text-text-secondary">
             Ничего не найдено
@@ -452,9 +407,9 @@ export function TrackList() {
               >
                 <VirtualGrid
                   tracks={tracks}
-                  allTracks={tracks}
                   scrollElementRef={scrollWrapperRef}
-                  onEdit={setEditingTrack}
+                  onPlay={handlePlay}
+                  onEdit={handleEdit}
                   selectionActive={selected.size > 0}
                   selected={selected}
                   onToggleSelect={toggleSelect}
@@ -469,9 +424,9 @@ export function TrackList() {
               >
                 <VirtualList
                   tracks={tracks}
-                  allTracks={tracks}
                   scrollElementRef={scrollWrapperRef}
-                  onEdit={setEditingTrack}
+                  onPlay={handlePlay}
+                  onEdit={handleEdit}
                   selectionActive={selected.size > 0}
                   selected={selected}
                   onToggleSelect={toggleSelect}

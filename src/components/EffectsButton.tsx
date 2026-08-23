@@ -1,11 +1,11 @@
 import { SlidersHorizontal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useCurrentTrack } from "../hooks/useCurrentTrack";
-import { useLibraryStore } from "../store/libraryStore";
 import {
   EQ_BAND_FREQS_HZ,
   usePlaybackSettingsStore,
 } from "../store/playbackSettingsStore";
+import { useTempoStore, useTrackTempo } from "../store/tempoStore";
 
 const PRESETS: Record<string, number[]> = {
   Плоский: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -27,10 +27,15 @@ function pctFromBottom(gain: number): number {
 
 export function EffectsButton() {
   const [open, setOpen] = useState(false);
-  const { crossfadeSecs, eqGains, init, setCrossfadeSecs, setEqGains, setEqBand } =
-    usePlaybackSettingsStore();
+  const crossfadeSecs = usePlaybackSettingsStore((s) => s.crossfadeSecs);
+  const eqGains = usePlaybackSettingsStore((s) => s.eqGains);
+  const init = usePlaybackSettingsStore((s) => s.init);
+  const setCrossfadeSecs = usePlaybackSettingsStore((s) => s.setCrossfadeSecs);
+  const setEqGains = usePlaybackSettingsStore((s) => s.setEqGains);
+  const setEqBand = usePlaybackSettingsStore((s) => s.setEqBand);
   const track = useCurrentTrack();
-  const setTrackTempo = useLibraryStore((s) => s.setTrackTempo);
+  const tempo = useTrackTempo(track);
+  const setTempo = useTempoStore((s) => s.setTempo);
 
   useEffect(() => {
     init();
@@ -107,16 +112,16 @@ export function EffectsButton() {
             <div>
               <div className="mb-1 flex justify-between text-xs text-text-secondary">
                 <span>Скорость</span>
-                <span>{(track?.tempo ?? 1).toFixed(2)}x</span>
+                <span>{tempo.toFixed(2)}x</span>
               </div>
               <input
                 type="range"
                 min={0.5}
                 max={2}
                 step={0.05}
-                value={track?.tempo ?? 1}
+                value={tempo}
                 disabled={!track}
-                onChange={(e) => track && setTrackTempo(track.id, Number(e.target.value))}
+                onChange={(e) => track && setTempo(track, Number(e.target.value))}
                 className="w-full disabled:opacity-40"
                 style={{ accentColor: "var(--color-accent-primary)" }}
               />

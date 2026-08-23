@@ -1,10 +1,11 @@
 import { Drawer } from "vaul";
-import { ListOrdered, Music2, Repeat, Repeat1, Shuffle, X } from "lucide-react";
-import { useMemo, useState } from "react";
-import { useTrackCover } from "../hooks/useTrackCover";
+import { ListOrdered, Repeat, Repeat1, Shuffle, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import type { Track } from "../types";
+import { TrackCover } from "./TrackCover";
+import { VirtualizedList } from "./VirtualizedList";
 
 function identityIndices(length: number): number[] {
   return Array.from({ length }, (_, i) => i);
@@ -17,8 +18,6 @@ function rotateToStart(order: number[], startValue: number): number[] {
 }
 
 function QueueRow({ track, isActive, onPlay }: { track: Track; isActive: boolean; onPlay: () => void }) {
-  const cover = useTrackCover(track.path);
-
   return (
     <button
       onClick={onPlay}
@@ -26,13 +25,10 @@ function QueueRow({ track, isActive, onPlay }: { track: Track; isActive: boolean
         isActive ? "bg-card-hover" : "hover:bg-card-hover"
       }`}
     >
-      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-background">
-        {cover ? (
-          <img src={cover} alt="" className="h-full w-full object-cover" />
-        ) : (
-          <Music2 size={16} className="text-text-secondary/40" />
-        )}
-      </div>
+      <TrackCover
+        path={track.path}
+        className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-background"
+      />
       <div className="min-w-0">
         <div
           className={`truncate text-sm ${isActive ? "text-karaoke-active-word-highlight" : "text-text-primary"}`}
@@ -49,9 +45,16 @@ function QueueRow({ track, isActive, onPlay }: { track: Track; isActive: boolean
 
 export function QueueDrawer() {
   const [open, setOpen] = useState(false);
-  const { queue, shuffleOrder, cursor, shuffle, repeat, toggleShuffle, cycleRepeat, playAtQueueIndex } =
-    useQueueStore();
+  const queue = useQueueStore((s) => s.queue);
+  const shuffleOrder = useQueueStore((s) => s.shuffleOrder);
+  const cursor = useQueueStore((s) => s.cursor);
+  const shuffle = useQueueStore((s) => s.shuffle);
+  const repeat = useQueueStore((s) => s.repeat);
+  const toggleShuffle = useQueueStore((s) => s.toggleShuffle);
+  const cycleRepeat = useQueueStore((s) => s.cycleRepeat);
+  const playAtQueueIndex = useQueueStore((s) => s.playAtQueueIndex);
   const currentPath = usePlayerStore((s) => s.currentPath);
+  const scrollWrapperRef = useRef<HTMLDivElement>(null);
 
   const rotatedIndices = useMemo(() => {
     if (queue.length === 0) return [];
@@ -59,7 +62,10 @@ export function QueueDrawer() {
     return rotateToStart(order, cursor);
   }, [queue, shuffleOrder, shuffle, cursor]);
 
-  const ordered = rotatedIndices.map((i) => queue[i]).filter(Boolean);
+  const ordered = useMemo(
+    () => rotatedIndices.map((i) => queue[i]).filter(Boolean),
+    [rotatedIndices, queue],
+  );
 
   const repeatIcon = repeat === "one" ? <Repeat1 size={16} /> : <Repeat size={16} />;
   const repeatLabel =
@@ -115,22 +121,29 @@ export function QueueDrawer() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto">
+            <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto">
               {ordered.length === 0 ? (
                 <p className="text-sm text-text-secondary">
                   Очередь пуста — начните воспроизведение трека из библиотеки
                 </p>
               ) : (
-                <div className="flex flex-col gap-1">
-                  {ordered.map((track, i) => (
+                // Windowed like every other track list: a queue is as long as
+                // whatever list it was started from, so an unvirtualized one
+                // mounted a row (and requested a cover) per library track.
+                <VirtualizedList
+                  items={ordered}
+                  scrollElementRef={scrollWrapperRef}
+                  estimateSize={56}
+                  gap={4}
+                  getItemKey={(track, i) => `${track.id}-${i}`}
+                  renderItem={(track, i) => (
                     <QueueRow
-                      key={`${track.id}-${i}`}
                       track={track}
                       isActive={rotatedIndices[i] === cursor && track.path === currentPath}
                       onPlay={() => playAtQueueIndex(rotatedIndices[i])}
                     />
-                  ))}
-                </div>
+                  )}
+                />
               )}
             </div>
           </div>

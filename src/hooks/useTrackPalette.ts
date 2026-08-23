@@ -1,43 +1,40 @@
-import { Vibrant } from "node-vibrant/browser";
 import { useEffect, useState } from "react";
+import { libraryApi } from "../api/library";
+import type { TrackPalette } from "../types";
 
-export interface TrackPalette {
-  vibrant: string;
-  darkVibrant: string;
-  muted: string;
-  darkMuted: string;
-}
+export type { TrackPalette };
 
-const cache = new Map<string, TrackPalette>();
+const cache = new Map<string, TrackPalette | null>();
 
-/** Extracts dominant colors from a track's cover (data URL) for the Now Playing
- * background gradient, per track so repeated plays don't re-run extraction. */
-export function useTrackPalette(coverDataUrl: string | null): TrackPalette | null {
+/**
+ * Dominant colors of a track's cover, for the Now Playing background gradient.
+ *
+ * Extraction used to run in the webview through `node-vibrant`, which decoded
+ * the cover and quantized its pixels on the main thread on every track change -
+ * a visible hitch on exactly the screen where the gradient is meant to fade in
+ * smoothly. It now happens in Rust off the UI thread, reusing the thumbnail
+ * already cached for the cover art. Cached per path so repeated plays don't
+ * even make the round trip.
+ */
+export function useTrackPalette(path: string | null): TrackPalette | null {
   const [palette, setPalette] = useState<TrackPalette | null>(
-    coverDataUrl ? (cache.get(coverDataUrl) ?? null) : null,
+    path ? (cache.get(path) ?? null) : null,
   );
 
   useEffect(() => {
-    if (!coverDataUrl) {
+    if (!path) {
       setPalette(null);
       return;
     }
-    const cached = cache.get(coverDataUrl);
-    if (cached) {
-      setPalette(cached);
+    if (cache.has(path)) {
+      setPalette(cache.get(path)!);
       return;
     }
     let cancelled = false;
-    Vibrant.from(coverDataUrl)
-      .getPalette()
-      .then((p) => {
-        const result: TrackPalette = {
-          vibrant: p.Vibrant?.hex ?? "#7c5cff",
-          darkVibrant: p.DarkVibrant?.hex ?? "#2a1f4d",
-          muted: p.Muted?.hex ?? "#4a4560",
-          darkMuted: p.DarkMuted?.hex ?? "#15121f",
-        };
-        cache.set(coverDataUrl, result);
+    libraryApi
+      .getTrackPalette(path)
+      .then((result) => {
+        cache.set(path, result);
         if (!cancelled) setPalette(result);
       })
       .catch(() => {
@@ -46,7 +43,7 @@ export function useTrackPalette(coverDataUrl: string | null): TrackPalette | nul
     return () => {
       cancelled = true;
     };
-  }, [coverDataUrl]);
+  }, [path]);
 
   return palette;
 }

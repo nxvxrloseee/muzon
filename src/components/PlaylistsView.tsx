@@ -1,15 +1,14 @@
 import { Reorder } from "motion/react";
-import { Heart, Music2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Heart, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useLenis } from "../hooks/useLenis";
-import { useTrackCover } from "../hooks/useTrackCover";
 import { useLibraryStore } from "../store/libraryStore";
 import { usePlaylistStore } from "../store/playlistStore";
 import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
 import type { Track } from "../types";
+import { TrackCover } from "./TrackCover";
 import { VirtualizedList } from "./VirtualizedList";
 
 function TrackRow({
@@ -27,18 +26,13 @@ function TrackRow({
   removeTitle: string;
   draggable: boolean;
 }) {
-  const cover = useTrackCover(track.path);
-
   const content = (
     <>
       <button onClick={onPlay} className="flex flex-1 items-center gap-3 text-left">
-        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-hover">
-          {cover ? (
-            <img src={cover} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Music2 size={16} className="text-text-secondary/40" />
-          )}
-        </div>
+        <TrackCover
+          path={track.path}
+          className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-hover"
+        />
         <div className="min-w-0">
           <div className="truncate text-sm text-text-primary">{track.title}</div>
           <div className="truncate text-xs text-text-secondary">
@@ -74,18 +68,16 @@ function TrackRow({
 }
 
 export function PlaylistsView() {
-  const {
-    playlists,
-    selectedId,
-    tracks,
-    refreshPlaylists,
-    selectPlaylist,
-    createPlaylist,
-    renamePlaylist,
-    deletePlaylist,
-    removeTrack,
-    reorderTracks,
-  } = usePlaylistStore();
+  const playlists = usePlaylistStore((s) => s.playlists);
+  const selectedId = usePlaylistStore((s) => s.selectedId);
+  const tracks = usePlaylistStore((s) => s.tracks);
+  const refreshPlaylists = usePlaylistStore((s) => s.refreshPlaylists);
+  const selectPlaylist = usePlaylistStore((s) => s.selectPlaylist);
+  const createPlaylist = usePlaylistStore((s) => s.createPlaylist);
+  const renamePlaylist = usePlaylistStore((s) => s.renamePlaylist);
+  const deletePlaylist = usePlaylistStore((s) => s.deletePlaylist);
+  const removeTrack = usePlaylistStore((s) => s.removeTrack);
+  const reorderTracks = usePlaylistStore((s) => s.reorderTracks);
   const setQueue = useQueueStore((s) => s.setQueue);
   const libraryTracks = useLibraryStore((s) => s.tracks);
   const setFavorite = useLibraryStore((s) => s.setFavorite);
@@ -96,8 +88,6 @@ export function PlaylistsView() {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
-  const scrollContentRef = useRef<HTMLDivElement>(null);
-  useLenis(scrollWrapperRef, scrollContentRef);
 
   useEffect(() => {
     refreshPlaylists();
@@ -207,8 +197,8 @@ export function PlaylistsView() {
         </div>
       </div>
 
-      <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto p-4">
-        <div ref={scrollContentRef}>
+      <div ref={scrollWrapperRef} data-lenis-prevent className="flex-1 overflow-y-auto p-4">
+        <div>
         {showFavorites ? (
           favoriteTracks.length === 0 ? (
             <div className="flex h-full items-center justify-center text-text-secondary">

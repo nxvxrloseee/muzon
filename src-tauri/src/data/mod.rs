@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod cover_protocol;
 pub mod covers;
 pub mod db;
 pub mod hotkeys_store;

@@ -12,6 +12,7 @@ export const libraryApi = {
   addMusicFolder: () => commands.addMusicFolder(),
   getTracks: () => commands.getTracks(),
   getTrackCover: (path: string) => commands.getTrackCover(path),
+  getTrackPalette: (path: string) => commands.getTrackPalette(path),
   updateTrackTags: (path: string, edit: TrackEdit) =>
     commands.updateTrackTags(
       path,

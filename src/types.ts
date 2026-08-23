@@ -11,4 +11,5 @@ export type {
   ScanReport,
   Theme,
   Track,
+  TrackPalette,
 } from "./bindings";

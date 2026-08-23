@@ -21,9 +21,16 @@ const NAV_ITEMS: { view: ViewName; label: string; icon: typeof Library }[] = [
 ];
 
 export function Sidebar() {
-  const { addFolder, scanning, error } = useLibraryStore();
-  const { view, setView } = useUiStore();
-  const { query, setQuery } = useSearchStore();
+  // Individual selectors, not whole-store subscriptions: the sidebar used to
+  // re-render on every change to the tracks array (a favourite toggle, a tempo
+  // drag) despite rendering none of it.
+  const addFolder = useLibraryStore((s) => s.addFolder);
+  const scanning = useLibraryStore((s) => s.scanning);
+  const error = useLibraryStore((s) => s.error);
+  const view = useUiStore((s) => s.view);
+  const setView = useUiStore((s) => s.setView);
+  const query = useSearchStore((s) => s.query);
+  const setQuery = useSearchStore((s) => s.setQuery);
   const openPalette = useCommandPaletteStore((s) => s.setOpen);
 
   return (

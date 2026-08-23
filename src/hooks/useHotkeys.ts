@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useHotkeysStore } from "../store/hotkeysStore";
+import { playbackClock } from "../store/playbackClock";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useUiStore } from "../store/uiStore";
@@ -43,11 +44,11 @@ export function useHotkeys() {
         if (player.currentPath) player.toggle();
       } else if (key === bindings.seekForward) {
         e.preventDefault();
-        if (player.currentPath) player.seek(player.positionSecs + SEEK_STEP_SECS);
+        if (player.currentPath) player.seek(playbackClock.get() + SEEK_STEP_SECS);
       } else if (key === bindings.seekBackward) {
         e.preventDefault();
         if (player.currentPath) {
-          player.seek(Math.max(0, player.positionSecs - SEEK_STEP_SECS));
+          player.seek(Math.max(0, playbackClock.get() - SEEK_STEP_SECS));
         }
       } else if (key === bindings.volumeUp) {
         e.preventDefault();

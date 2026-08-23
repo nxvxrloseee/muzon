@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { Key, ReactNode, RefObject } from "react";
+import { useLayoutEffect, useReducer, type Key, type ReactNode, type RefObject } from "react";
 
 interface VirtualizedListProps<T> {
   items: T[];
@@ -31,6 +31,14 @@ export function VirtualizedList<T>({
   overscan = 8,
   className,
 }: VirtualizedListProps<T>) {
+  // `scrollElementRef.current` is still null while this first renders, so the
+  // virtualizer has nothing to measure and reports a zero-height list. One
+  // forced re-render after mount hands it the real element. (Previously this
+  // happened to work only because every caller re-rendered for other reasons
+  // shortly after mounting.)
+  const [, remeasureAfterMount] = useReducer((n: number) => n + 1, 0);
+  useLayoutEffect(remeasureAfterMount, []);
+
   const rowVirtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElementRef.current,

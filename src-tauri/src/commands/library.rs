@@ -1,5 +1,5 @@
 use crate::data::covers;
-use crate::domain::{library, Track};
+use crate::domain::{library, palette, Track, TrackPalette};
 use crate::state::AppState;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -60,6 +60,28 @@ pub async fn get_track_cover(state: State<'_, AppState>, path: String) -> Result
         .unwrap()
         .insert(path, result.clone());
     Ok(result)
+}
+
+/// Colors for the Now Playing gradient, taken from the same cached thumbnail
+/// the cover art is served from - so this costs a small decode at most once per
+/// track, off the UI thread, instead of decoding and quantizing in the webview.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_track_palette(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Option<TrackPalette>, ()> {
+    let Ok(cache_dir) = app.path().app_cache_dir() else {
+        return Ok(None);
+    };
+    let cache_dir = cache_dir.join("covers");
+
+    Ok(tokio::task::spawn_blocking(move || {
+        let (_, bytes) = covers::read_cover_thumbnail(&cache_dir, std::path::Path::new(&path))?;
+        palette::extract(&bytes)
+    })
+    .await
+    .unwrap_or(None))
 }
 
 #[tauri::command]

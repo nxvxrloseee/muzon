@@ -1,21 +1,17 @@
-import { ChevronLeft, ChevronRight, Music2 } from "lucide-react";
-import { motion } from "motion/react";
-import { useMemo, useRef, useState } from "react";
-import { useLenis } from "../hooks/useLenis";
-import { useTrackCover } from "../hooks/useTrackCover";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { memo, useCallback, useDeferredValue, useMemo, useRef, useState } from "react";
 import { type ArtistGroup, groupArtists } from "../lib/trackGroups";
 import { useLibraryStore } from "../store/libraryStore";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
+import { TrackCover } from "./TrackCover";
 import { VirtualizedList } from "./VirtualizedList";
 
 function ArtistDetail({ group, onBack }: { group: ArtistGroup; onBack: () => void }) {
   const setQueue = useQueueStore((s) => s.setQueue);
   const currentPath = usePlayerStore((s) => s.currentPath);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
-  const scrollContentRef = useRef<HTMLDivElement>(null);
-  useLenis(scrollWrapperRef, scrollContentRef);
 
   return (
     <div className="flex h-full flex-col">
@@ -31,8 +27,8 @@ function ArtistDetail({ group, onBack }: { group: ArtistGroup; onBack: () => voi
         <h1 className="mb-4 text-xl font-semibold text-text-primary">{group.artist}</h1>
       </div>
 
-      <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto">
-        <div ref={scrollContentRef}>
+      <div ref={scrollWrapperRef} data-lenis-prevent className="flex-1 overflow-y-auto">
+        <div>
           <VirtualizedList
             items={group.tracks}
             scrollElementRef={scrollWrapperRef}
@@ -61,46 +57,47 @@ function ArtistDetail({ group, onBack }: { group: ArtistGroup; onBack: () => voi
   );
 }
 
-function ArtistRow({ group, onOpen }: { group: ArtistGroup; onOpen: () => void }) {
-  const cover = useTrackCover(group.tracks[0]?.path);
-
+const ArtistRow = memo(function ArtistRow({
+  group,
+  onOpen,
+}: {
+  group: ArtistGroup;
+  onOpen: (artist: string) => void;
+}) {
   return (
-    <motion.button
-      onClick={onOpen}
-      whileHover={{ x: 2 }}
-      whileTap={{ scale: 0.98 }}
-      transition={{ type: "spring", stiffness: 400, damping: 32 }}
-      className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-card-hover"
+    <button
+      onClick={() => onOpen(group.artist)}
+      className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-[background-color,transform] duration-150 hover:translate-x-0.5 hover:bg-card-hover"
     >
-      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-card-background shadow-sm">
-        {cover ? (
-          <img src={cover} alt="" className="h-full w-full object-cover" />
-        ) : (
-          <Music2 size={16} className="text-text-secondary/40" />
-        )}
-      </div>
+      <TrackCover
+        path={group.tracks[0]?.path}
+        className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-card-background shadow-sm"
+      />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm text-text-primary">{group.artist}</div>
         <div className="truncate text-xs text-text-secondary">{group.tracks.length} треков</div>
       </div>
       <ChevronRight size={16} className="text-text-secondary" />
-    </motion.button>
+    </button>
   );
-}
+});
 
 export function ArtistsView() {
   const tracks = useLibraryStore((s) => s.tracks);
   const query = useSearchStore((s) => s.query);
   const [selectedArtist, setSelectedArtist] = useState<string | null>(null);
+  const scrollWrapperRef = useRef<HTMLDivElement>(null);
+  const openArtist = useCallback((artist: string) => setSelectedArtist(artist), []);
 
   const groups = useMemo(() => groupArtists(tracks), [tracks]);
   const selected = groups.find((g) => g.artist === selectedArtist) ?? null;
 
+  const deferredQuery = useDeferredValue(query);
   const filteredGroups = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     if (!q) return groups;
     return groups.filter((g) => g.artist.toLowerCase().includes(q));
-  }, [groups, query]);
+  }, [groups, deferredQuery]);
 
   if (tracks.length === 0) {
     return (
@@ -123,10 +120,18 @@ export function ArtistsView() {
   }
 
   return (
-    <div className="flex flex-col gap-1 p-4">
-      {filteredGroups.map((g) => (
-        <ArtistRow key={g.artist} group={g} onOpen={() => setSelectedArtist(g.artist)} />
-      ))}
+    <div className="flex h-full flex-col">
+      <div ref={scrollWrapperRef} data-lenis-prevent className="flex-1 overflow-y-auto">
+        <VirtualizedList
+          items={filteredGroups}
+          scrollElementRef={scrollWrapperRef}
+          estimateSize={52}
+          gap={4}
+          className="p-4"
+          getItemKey={(g) => g.artist}
+          renderItem={(g) => <ArtistRow group={g} onOpen={openArtist} />}
+        />
+      </div>
     </div>
   );
 }

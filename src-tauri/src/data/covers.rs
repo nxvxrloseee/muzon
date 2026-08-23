@@ -2,7 +2,7 @@ use base64::Engine;
 use lofty::file::TaggedFileExt;
 use lofty::probe::Probe;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const THUMBNAIL_MAX_DIM: u32 = 200;
 
@@ -18,9 +18,65 @@ const FOLDER_COVER_NAMES: &[&str] = &[
 ];
 
 pub fn read_cover_data_url(path: &Path) -> Option<String> {
-    let (mime, bytes) = read_embedded_cover(path).or_else(|| read_folder_cover(path))?;
+    let (mime, bytes) = read_cover_source(path)?;
     let (mime, bytes) = downscale_cover(&bytes).unwrap_or((mime, bytes));
     Some(to_data_url(&mime, &bytes))
+}
+
+/// Thumbnail bytes for the `muzon-cover://` protocol, memoized on disk under
+/// `cache_dir`. Decoding a full-size embedded JPEG per list row was the
+/// expensive part of scrolling the library; once a track's thumbnail has been
+/// written here, every later request is a plain file read.
+pub fn read_cover_thumbnail(cache_dir: &Path, track_path: &Path) -> Option<(String, Vec<u8>)> {
+    let key = cache_key(track_path);
+
+    for (ext, mime) in [("jpg", "image/jpeg"), ("png", "image/png")] {
+        let candidate = thumbnail_path(cache_dir, &key, ext);
+        if let Ok(bytes) = std::fs::read(&candidate) {
+            return Some((mime.to_string(), bytes));
+        }
+    }
+
+    let (mime, bytes) = read_cover_source(track_path)?;
+    let (mime, bytes) = downscale_cover(&bytes).unwrap_or((mime, bytes));
+
+    // Best-effort: a failed cache write just means we recompute next time.
+    let ext = if mime == "image/png" { "png" } else { "jpg" };
+    let _ = std::fs::create_dir_all(cache_dir);
+    let _ = std::fs::write(thumbnail_path(cache_dir, &key, ext), &bytes);
+
+    Some((mime, bytes))
+}
+
+fn thumbnail_path(cache_dir: &Path, key: &str, ext: &str) -> PathBuf {
+    cache_dir.join(format!("{key}.{ext}"))
+}
+
+/// Path + mtime, so retagging a file (which rewrites its embedded art) yields a
+/// different key instead of serving the stale thumbnail forever.
+fn cache_key(track_path: &Path) -> String {
+    let mtime = std::fs::metadata(track_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in track_path
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .chain(mtime.to_le_bytes().iter())
+    {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn read_cover_source(path: &Path) -> Option<(String, Vec<u8>)> {
+    read_embedded_cover(path).or_else(|| read_folder_cover(path))
 }
 
 fn downscale_cover(bytes: &[u8]) -> Option<(String, Vec<u8>)> {

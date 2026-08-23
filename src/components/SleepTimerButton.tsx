@@ -12,8 +12,12 @@ function formatRemaining(secs: number): string {
 
 export function SleepTimerButton() {
   const [open, setOpen] = useState(false);
-  const { deadline, endOfTrackPending, remainingSecs, setMinutes, setEndOfTrack, cancel } =
-    useSleepTimerStore();
+  const deadline = useSleepTimerStore((s) => s.deadline);
+  const endOfTrackPending = useSleepTimerStore((s) => s.endOfTrackPending);
+  const remainingSecs = useSleepTimerStore((s) => s.remainingSecs);
+  const setMinutes = useSleepTimerStore((s) => s.setMinutes);
+  const setEndOfTrack = useSleepTimerStore((s) => s.setEndOfTrack);
+  const cancel = useSleepTimerStore((s) => s.cancel);
   const active = deadline !== null || endOfTrackPending;
 
   return (

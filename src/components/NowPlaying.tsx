@@ -1,15 +1,16 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown, Music2, Pause, Pencil, Play } from "lucide-react";
+import { ChevronDown, Pause, Pencil, Play } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { lyricsApi } from "../api/lyrics";
 import { useCurrentTrack } from "../hooks/useCurrentTrack";
-import { useTrackCover } from "../hooks/useTrackCover";
 import { useTrackPalette, type TrackPalette } from "../hooks/useTrackPalette";
+import { usePlaybackWithin } from "../store/playbackClock";
 import { usePlayerStore } from "../store/playerStore";
 import { useUiStore } from "../store/uiStore";
 import type { LrcLine, LrcWord, Lyrics } from "../types";
 import { LrcEditor } from "./LrcEditor";
 import { PlaybackProgress } from "./PlaybackProgress";
+import { TrackCover } from "./TrackCover";
 
 function paletteGradient(p: TrackPalette): string {
   return [
@@ -25,11 +26,13 @@ interface TimedLine extends LrcLine {
   endTimeSecs: number;
 }
 
-/** Subscribes to `positionSecs` itself via a narrow boolean selector, so
- * Zustand only re-renders this one word (not the whole lyrics panel) exactly
- * when its highlighted state actually flips. */
+/** Subscribes to the playback clock through a narrow boolean, so this one word
+ * (not the whole lyrics panel) re-renders exactly when its highlighted state
+ * actually flips. The clock is deliberately a separate store from
+ * `playerStore`: hundreds of these would otherwise wake every player
+ * subscriber in the app on every animation frame. */
 function LyricWord({ word }: { word: LrcWord }) {
-  const active = usePlayerStore((s) => s.positionSecs >= word.time_secs);
+  const active = usePlaybackWithin(word.time_secs);
   return (
     <span className={active ? "text-karaoke-active-word-highlight" : undefined}>{word.text}</span>
   );
@@ -46,9 +49,7 @@ const LyricLineItem = memo(function LyricLineItem({
   line: TimedLine;
   onSeek: (secs: number) => void;
 }) {
-  const isActive = usePlayerStore(
-    (s) => s.positionSecs >= line.time_secs && s.positionSecs < line.endTimeSecs,
-  );
+  const isActive = usePlaybackWithin(line.time_secs, line.endTimeSecs);
   const ref = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -98,8 +99,7 @@ export function NowPlaying() {
   const toggle = usePlayerStore((s) => s.toggle);
   const seek = usePlayerStore((s) => s.seek);
   const setView = useUiStore((s) => s.setView);
-  const cover = useTrackCover(currentPath);
-  const palette = useTrackPalette(cover);
+  const palette = useTrackPalette(currentPath);
   const track = useCurrentTrack();
   const [lyrics, setLyrics] = useState<Lyrics | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -146,42 +146,50 @@ export function NowPlaying() {
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-background">
-      {([0, 1] as const).map((i) => (
-        <div
-          key={i}
-          className="absolute inset-0 blur-[110px] transition-opacity duration-[1200ms] ease-out"
-          style={{
-            background: bg.layers[i] ? paletteGradient(bg.layers[i]!) : undefined,
-            opacity: i === bg.active && bg.layers[i] ? 1 : 0,
-          }}
-        />
-      ))}
+      {/* A 110px blur across a full-screen layer makes WebKit allocate (and
+          re-blur) a full-screen offscreen buffer. Blurring a layer rendered at
+          1/5 scale and then scaling it up looks the same - the gradient's stops
+          are percentage-based - for 1/25th of the pixels. */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden" style={{ contain: "paint" }}>
+        {([0, 1] as const).map((i) => (
+          <div
+            key={i}
+            className="absolute left-0 top-0 h-[20%] w-[20%] origin-top-left blur-[22px] transition-opacity duration-[1200ms] ease-out"
+            style={{
+              transform: "scale(5)",
+              willChange: "opacity",
+              background: bg.layers[i] ? paletteGradient(bg.layers[i]!) : undefined,
+              opacity: i === bg.active && bg.layers[i] ? 1 : 0,
+            }}
+          />
+        ))}
+      </div>
       <div className="absolute inset-0 bg-background/45" />
 
       <div className="relative z-10 flex h-full flex-col">
         <button
           onClick={() => setView("library")}
-          className="m-4 flex w-fit items-center gap-2 rounded-full bg-card-background/60 px-3 py-1.5 text-sm text-text-primary backdrop-blur-lg"
+          className="m-4 flex w-fit items-center gap-2 rounded-full bg-card-background/80 px-3 py-1.5 text-sm text-text-primary"
         >
           <ChevronDown size={16} />
           Свернуть
         </button>
 
         <div className="flex flex-1 items-center justify-center gap-6 overflow-hidden px-10 pb-10">
-          <div className="flex w-72 flex-shrink-0 flex-col items-center gap-4 rounded-3xl bg-card-background/25 p-6 shadow-lg backdrop-blur-2xl">
+          <div className="flex w-72 flex-shrink-0 flex-col items-center gap-4 rounded-3xl bg-card-background/80 p-6 shadow-lg">
             <AnimatePresence mode="wait">
               <motion.div
                 key={currentPath ?? "empty"}
                 initial={{ opacity: 0, scale: 0.92 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ type: "spring", stiffness: 260, damping: 24 }}
-                className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-card-background shadow-lg"
+                className="w-full"
               >
-                {cover ? (
-                  <img src={cover} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <Music2 size={48} className="text-text-secondary/40" />
-                )}
+                <TrackCover
+                  path={currentPath}
+                  iconSize={48}
+                  className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-card-background shadow-lg"
+                />
               </motion.div>
             </AnimatePresence>
             <div className="text-center">
@@ -203,11 +211,11 @@ export function NowPlaying() {
             </div>
           </div>
 
-          <div className="flex h-full max-w-xl flex-1 flex-col justify-center gap-3 overflow-y-auto rounded-3xl bg-card-background/15 px-8 py-10 text-center shadow-lg backdrop-blur-2xl">
+          <div className="flex h-full max-w-xl flex-1 flex-col justify-center gap-3 overflow-y-auto rounded-3xl bg-card-background/70 px-8 py-10 text-center shadow-lg">
             <button
               onClick={() => setEditorOpen(true)}
               disabled={!currentPath}
-              className="mx-auto flex items-center gap-1.5 rounded-full bg-card-background/70 px-3 py-1 text-xs text-text-secondary backdrop-blur hover:text-text-primary disabled:opacity-40"
+              className="mx-auto flex items-center gap-1.5 rounded-full bg-card-background/90 px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
             >
               <Pencil size={12} />
               Редактировать текст

@@ -1,7 +1,6 @@
-import { Music2, Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { motion } from "motion/react";
 import { useCurrentTrack } from "../hooks/useCurrentTrack";
-import { useTrackCover } from "../hooks/useTrackCover";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useUiStore } from "../store/uiStore";
@@ -9,6 +8,7 @@ import { EffectsButton } from "./EffectsButton";
 import { PlaybackProgress } from "./PlaybackProgress";
 import { QueueDrawer } from "./QueueDrawer";
 import { SleepTimerButton } from "./SleepTimerButton";
+import { TrackCover } from "./TrackCover";
 
 export function PlayerBar() {
   const currentPath = usePlayerStore((s) => s.currentPath);
@@ -19,7 +19,6 @@ export function PlayerBar() {
   const playNext = useQueueStore((s) => s.playNext);
   const playPrevious = useQueueStore((s) => s.playPrevious);
   const setView = useUiStore((s) => s.setView);
-  const cover = useTrackCover(currentPath);
   const track = useCurrentTrack();
 
   const title = track?.title ?? (currentPath ? "Без названия" : "Ничего не играет");
@@ -32,13 +31,11 @@ export function PlayerBar() {
         disabled={!currentPath}
         className="flex w-56 flex-shrink-0 items-center gap-3 overflow-hidden rounded-md p-1 text-left hover:bg-card-hover disabled:cursor-default disabled:hover:bg-transparent"
       >
-        <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-background">
-          {cover ? (
-            <img src={cover} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Music2 size={18} className="text-text-secondary/40" />
-          )}
-        </div>
+        <TrackCover
+          path={currentPath}
+          iconSize={18}
+          className="flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-background"
+        />
         <span className="min-w-0">
           <span className="block truncate text-sm text-text-primary">{title}</span>
           {artist && (

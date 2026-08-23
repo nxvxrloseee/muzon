@@ -7,6 +7,17 @@ export const commands = {
 	addMusicFolder: () => __TAURI_INVOKE<ScanReport>("add_music_folder"),
 	getTracks: () => __TAURI_INVOKE<Track[]>("get_tracks").then((v) => (v.map(i=>({...i,duration_secs:i.duration_secs==null?i.duration_secs:i.duration_secs})) as typeof v)),
 	getTrackCover: (path: string) => __TAURI_INVOKE<string | null>("get_track_cover", { path }),
+	/**
+	 *  Colors for the Now Playing gradient, taken from the same cached thumbnail
+	 *  the cover art is served from - so this costs a small decode at most once per
+	 *  track, off the UI thread, instead of decoding and quantizing in the webview.
+	 */
+	getTrackPalette: (path: string) => __TAURI_INVOKE<{
+	vibrant: string,
+	darkVibrant: string,
+	muted: string,
+	darkMuted: string,
+} | null>("get_track_palette", { path }),
 	updateTrackTags: (path: string, title: string, artist: string | null, album: string | null, trackNo: number | null, coverPath: string | null) => __TAURI_INVOKE<Track>("update_track_tags", { path, title, artist, album, trackNo, coverPath }).then((v) => (({...v,duration_secs:v.duration_secs==null?v.duration_secs:v.duration_secs}) as typeof v)),
 	toggleFavorite: (trackId: number) => __TAURI_INVOKE<boolean>("toggle_favorite", { trackId }),
 	getLyrics: (path: string) => __TAURI_INVOKE<{
@@ -154,5 +165,13 @@ export type Track = {
 	is_favorite: boolean,
 	/**  Playback speed multiplier without pitch shift; 1.0 = normal. */
 	tempo: number,
+};
+
+/**  The four swatches the Now Playing background gradient is built from. */
+export type TrackPalette = {
+	vibrant: string,
+	darkVibrant: string,
+	muted: string,
+	darkMuted: string,
 };
 
