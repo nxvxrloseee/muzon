@@ -21,6 +21,7 @@ pub fn set_session_queue(state: State<AppState>, queue_paths: Vec<String>, shuff
         session.queue_paths = queue_paths;
         session.shuffle_order = shuffle_order;
     });
+    state.control.publish("queue", serde_json::json!({ "changed": "queue" }));
 }
 
 /// The cheap, frequently-updated half: where playback is and how it's
@@ -43,6 +44,12 @@ pub fn set_session_progress(
         session.shuffle = shuffle;
         session.repeat = repeat;
     });
+
+    // Shells showing the queue only need to hear when the playing item or the
+    // order moved, not every playhead update.
+    if before.cursor != cursor || before.shuffle != shuffle {
+        state.control.publish("queue", serde_json::json!({ "changed": "cursor" }));
+    }
 
     // The session is also where MPRIS reads Shuffle and LoopStatus from, so a
     // toggle in the app has to be announced from here - nothing else knows the

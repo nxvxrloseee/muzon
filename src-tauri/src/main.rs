@@ -11,5 +11,11 @@ fn main() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    // `muzon ctl <method>` controls the running instance instead of opening a window
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("ctl") {
+        std::process::exit(muzon_lib::control_cli(&args[1..]));
+    }
+
     muzon_lib::run()
 }

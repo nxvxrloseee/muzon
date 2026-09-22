@@ -69,6 +69,11 @@ impl PendingPulses {
     }
 }
 
+/// `muzon ctl …`: talks to the running instance's control socket and exits.
+pub fn control_cli(args: &[String]) -> i32 {
+    data::control::cli(args)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = Builder::<tauri::Wry>::new()
@@ -179,7 +184,11 @@ pub fn run() {
                 playback_settings_store,
                 session,
                 mpris: Default::default(),
+                control: Default::default(),
             });
+
+            // Queue, favourites and lyrics for desktop shells (see data/control.rs)
+            data::control::serve(app.handle().clone());
 
             let mpris_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -245,6 +254,7 @@ pub fn run() {
                         tick.duration_secs > 0.0,
                     );
                     if announced.as_ref() != Some(&current) {
+                        let playing_changed = announced.as_ref().map(|(p, _, _)| *p) != Some(current.0);
                         let metadata_changed = announced
                             .as_ref()
                             .map(|(_, path, had_duration)| {
@@ -256,6 +266,12 @@ pub fn run() {
                         )];
                         if metadata_changed {
                             properties.push(Property::Metadata(mpris::build_metadata(&handle)));
+                            state.control.publish("track", data::control::status(&handle));
+                        }
+                        if playing_changed {
+                            state
+                                .control
+                                .publish("playback", serde_json::json!({ "isPlaying": current.0 }));
                         }
                         state.mpris.notify(properties);
                         announced = Some(current);

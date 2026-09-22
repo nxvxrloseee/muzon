@@ -1,4 +1,5 @@
 use crate::data::audio::pipeline::{AudioPlayer, PlaybackTick};
+use crate::data::control::ControlHub;
 use crate::data::db::Db;
 use crate::data::hotkeys_store::HotkeysStore;
 use crate::data::mpris::MprisBridge;
@@ -22,4 +23,5 @@ pub struct AppState {
     pub playback_settings_store: PlaybackSettingsStore,
     pub session: SessionState,
     pub mpris: MprisBridge,
+    pub control: ControlHub,
 }

@@ -95,8 +95,10 @@ pub async fn get_track_palette(
 
 #[tauri::command]
 #[specta::specta]
-pub fn toggle_favorite(state: State<AppState>, track_id: i32) -> Result<bool, String> {
-    library::toggle_favorite(&state.db, track_id).map_err(|e| e.to_string())
+pub fn toggle_favorite(app: tauri::AppHandle, state: State<AppState>, track_id: i32) -> Result<bool, String> {
+    let is_favorite = library::toggle_favorite(&state.db, track_id).map_err(|e| e.to_string())?;
+    crate::data::control::announce_favorite(&app, track_id, is_favorite, false);
+    Ok(is_favorite)
 }
 
 /// Counts one listen. A single indexed UPDATE, so it stays synchronous - the

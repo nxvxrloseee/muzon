@@ -11,6 +11,8 @@ interface LibraryState {
   addFolder: () => Promise<void>;
   updateTrackTags: (path: string, edit: TrackEdit) => Promise<void>;
   toggleFavorite: (trackId: number) => Promise<void>;
+  /** A favourite already flipped elsewhere (the control socket): just show it. */
+  applyFavorite: (trackId: number, isFavorite: boolean) => void;
   setFavorite: (trackId: number, favorite: boolean) => Promise<void>;
   /** Counts one listen. The local copy is bumped straight away so a sort by
    * play count reorders as you listen, without re-reading the whole library. */
@@ -63,6 +65,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       ),
     }));
     const isFavorite = await libraryApi.toggleFavorite(trackId);
+    set((s) => ({
+      tracks: s.tracks.map((t) => (t.id === trackId ? { ...t, is_favorite: isFavorite } : t)),
+    }));
+  },
+  applyFavorite: (trackId, isFavorite) => {
     set((s) => ({
       tracks: s.tracks.map((t) => (t.id === trackId ? { ...t, is_favorite: isFavorite } : t)),
     }));
