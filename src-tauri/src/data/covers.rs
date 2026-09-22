@@ -29,23 +29,55 @@ pub fn read_cover_data_url(path: &Path) -> Option<String> {
 /// written here, every later request is a plain file read.
 pub fn read_cover_thumbnail(cache_dir: &Path, track_path: &Path) -> Option<(String, Vec<u8>)> {
     let key = cache_key(track_path);
-
-    for (ext, mime) in [("jpg", "image/jpeg"), ("png", "image/png")] {
-        let candidate = thumbnail_path(cache_dir, &key, ext);
-        if let Ok(bytes) = std::fs::read(&candidate) {
-            return Some((mime.to_string(), bytes));
+    if let Some((mime, path)) = cached_thumbnail(cache_dir, &key) {
+        if let Ok(bytes) = std::fs::read(&path) {
+            return Some((mime, bytes));
         }
     }
+    write_thumbnail(cache_dir, &key, track_path).map(|(mime, bytes, _)| (mime, bytes))
+}
 
+/// Filesystem path of the same cached thumbnail, generating it if it isn't
+/// there yet. MPRIS wants a `file://` URI the desktop shell can open for
+/// itself, not the bytes - and it should get the artwork the app already
+/// decoded for its own list rows rather than decoding the cover a second time.
+pub fn ensure_thumbnail_path(cache_dir: &Path, track_path: &Path) -> Option<PathBuf> {
+    let key = cache_key(track_path);
+    if let Some((_, path)) = cached_thumbnail(cache_dir, &key) {
+        return Some(path);
+    }
+    // Unlike the byte-returning path above, a failed cache write is fatal here:
+    // the whole point is to hand out a location something else can read.
+    let (_, _, path) = write_thumbnail(cache_dir, &key, track_path)?;
+    path.is_file().then_some(path)
+}
+
+fn cached_thumbnail(cache_dir: &Path, key: &str) -> Option<(String, PathBuf)> {
+    for (ext, mime) in [("jpg", "image/jpeg"), ("png", "image/png")] {
+        let candidate = thumbnail_path(cache_dir, key, ext);
+        if candidate.is_file() {
+            return Some((mime.to_string(), candidate));
+        }
+    }
+    None
+}
+
+/// Decodes, downscales and memoizes the cover, returning what it wrote and where.
+fn write_thumbnail(
+    cache_dir: &Path,
+    key: &str,
+    track_path: &Path,
+) -> Option<(String, Vec<u8>, PathBuf)> {
     let (mime, bytes) = read_cover_source(track_path)?;
     let (mime, bytes) = downscale_cover(&bytes).unwrap_or((mime, bytes));
 
     // Best-effort: a failed cache write just means we recompute next time.
     let ext = if mime == "image/png" { "png" } else { "jpg" };
+    let path = thumbnail_path(cache_dir, key, ext);
     let _ = std::fs::create_dir_all(cache_dir);
-    let _ = std::fs::write(thumbnail_path(cache_dir, &key, ext), &bytes);
+    let _ = std::fs::write(&path, &bytes);
 
-    Some((mime, bytes))
+    Some((mime, bytes, path))
 }
 
 fn thumbnail_path(cache_dir: &Path, key: &str, ext: &str) -> PathBuf {

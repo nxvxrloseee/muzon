@@ -1,5 +1,17 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Check, Heart, LayoutGrid, List, ListPlus, Pencil, X } from "lucide-react";
+import {
+  Check,
+  CornerDownRight,
+  Heart,
+  LayoutGrid,
+  List,
+  ListPlus,
+  ListFilter,
+  Pencil,
+  Plus,
+  X,
+} from "lucide-react";
+
 import {
   memo,
   type RefObject,
@@ -14,10 +26,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useLibrarySort } from "../hooks/useLibrarySort";
 import { useLibraryViewMode } from "../hooks/useLibraryViewMode";
 import { filterTracks } from "../lib/trackSearch";
+import { LIBRARY_SORT_LABELS, sortTracks, type LibrarySort } from "../lib/trackSort";
 import { useLibraryStore } from "../store/libraryStore";
 import { usePlayerStore } from "../store/playerStore";
 import { usePlaylistStore } from "../store/playlistStore";
@@ -64,13 +80,13 @@ function TrackActions({ track, onEdit }: { track: Track; onEdit: (track: Track) 
           render={
             <button
               className="flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
-              title="Добавить в плейлист"
+              title="В очередь или плейлист"
             />
           }
         >
           <ListPlus size={13} />
         </DropdownMenuTrigger>
-        <PlaylistDropdownItems trackIds={[track.id]} />
+        <TrackActionItems trackIds={[track.id]} />
       </DropdownMenu>
 
       <button
@@ -212,17 +228,38 @@ const TrackRow = memo(function TrackRow({
   );
 });
 
-function PlaylistDropdownItems({ trackIds }: { trackIds: number[] }) {
+/** Resolves ids to tracks in library order, which is the order the user picked
+ * them out of and so the order they should be queued in. */
+function tracksByIds(trackIds: number[]): Track[] {
+  const wanted = new Set(trackIds);
+  return useLibraryStore.getState().tracks.filter((track) => wanted.has(track.id));
+}
+
+function TrackActionItems({ trackIds }: { trackIds: number[] }) {
   const playlists = usePlaylistStore((s) => s.playlists);
   const addTrack = usePlaylistStore((s) => s.addTrack);
   const setFavorite = useLibraryStore((s) => s.setFavorite);
 
   return (
     <DropdownMenuContent align="end">
+      <DropdownMenuItem
+        onClick={() => useQueueStore.getState().playNextInQueue(tracksByIds(trackIds))}
+      >
+        <CornerDownRight size={13} className="mr-2" />
+        Играть следующим
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => useQueueStore.getState().enqueue(tracksByIds(trackIds))}>
+        <Plus size={13} className="mr-2" />
+        В конец очереди
+      </DropdownMenuItem>
+
+      <DropdownMenuSeparator />
+
       <DropdownMenuItem onClick={() => trackIds.forEach((id) => setFavorite(id, true))}>
         <Heart size={13} className="mr-2 text-red-500" fill="currentColor" />
         Любимые
       </DropdownMenuItem>
+      <DropdownMenuLabel>Плейлисты</DropdownMenuLabel>
       {playlists.length === 0 ? (
         <DropdownMenuItem disabled>Нет плейлистов</DropdownMenuItem>
       ) : (
@@ -319,6 +356,7 @@ export function TrackList() {
   const refreshPlaylists = usePlaylistStore((s) => s.refreshPlaylists);
   const query = useSearchStore((s) => s.query);
   const [viewMode, setViewMode] = useLibraryViewMode();
+  const [sort, setSort] = useLibrarySort();
   const [editingTrack, setEditingTrack] = useState<Track | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
@@ -327,7 +365,15 @@ export function TrackList() {
   // expensive part of a keystroke, and React can keep the input painted while
   // the list catches up.
   const deferredQuery = useDeferredValue(query);
-  const tracks = useMemo(() => filterTracks(allTracks, deferredQuery), [allTracks, deferredQuery]);
+  const tracks = useMemo(
+    () => sortTracks(filterTracks(allTracks, deferredQuery), sort),
+    [allTracks, deferredQuery, sort],
+  );
+
+  // Read at click time by `handlePlay`, which stays a stable callback on
+  // purpose - see below.
+  const sortRef = useRef(sort);
+  sortRef.current = sort;
 
   useEffect(() => {
     refreshPlaylists();
@@ -344,10 +390,12 @@ export function TrackList() {
 
   // Reads the list to queue at click time instead of taking it as a prop, so
   // rows don't get a new prop identity every time the library array changes.
+  // The queue has to come out in the order on screen, sort included, or playing
+  // the top of "недавно добавленные" would queue the library alphabetically.
   const handlePlay = useCallback((track: Track) => {
-    const visible = filterTracks(
-      useLibraryStore.getState().tracks,
-      useSearchStore.getState().query,
+    const visible = sortTracks(
+      filterTracks(useLibraryStore.getState().tracks, useSearchStore.getState().query),
+      sortRef.current,
     );
     useQueueStore.getState().setQueue(visible, track);
   }, []);
@@ -368,6 +416,28 @@ export function TrackList() {
         <span className="text-xs text-text-secondary">
           {tracks.length} {tracks.length === 1 ? "трек" : "треков"}
         </span>
+        <div className="flex items-center gap-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                className="flex items-center gap-1.5 rounded-md bg-card-background px-2.5 py-1.5 text-xs text-text-secondary hover:bg-card-hover hover:text-text-primary"
+                title="Порядок"
+              />
+            }
+          >
+            <ListFilter size={13} />
+            {LIBRARY_SORT_LABELS[sort]}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {(Object.keys(LIBRARY_SORT_LABELS) as LibrarySort[]).map((option) => (
+              <DropdownMenuItem key={option} onClick={() => setSort(option)}>
+                {LIBRARY_SORT_LABELS[option]}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <div className="flex gap-1 rounded-md bg-card-background p-0.5">
           <button
             onClick={() => setViewMode("grid")}
@@ -387,6 +457,7 @@ export function TrackList() {
           >
             <List size={14} />
           </button>
+        </div>
         </div>
       </div>
 
@@ -448,9 +519,9 @@ export function TrackList() {
               }
             >
               <ListPlus size={14} />
-              Добавить в плейлист
+              Действия
             </DropdownMenuTrigger>
-            <PlaylistDropdownItems trackIds={[...selected]} />
+            <TrackActionItems trackIds={[...selected]} />
           </DropdownMenu>
           <button
             onClick={() => setSelected(new Set())}

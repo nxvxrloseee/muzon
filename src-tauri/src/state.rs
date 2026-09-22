@@ -1,7 +1,9 @@
 use crate::data::audio::pipeline::{AudioPlayer, PlaybackTick};
 use crate::data::db::Db;
 use crate::data::hotkeys_store::HotkeysStore;
+use crate::data::mpris::MprisBridge;
 use crate::data::playback_settings_store::PlaybackSettingsStore;
+use crate::data::session_store::SessionState;
 use crate::data::theme_store::ThemeStore;
 use crate::domain::{Hotkeys, Theme};
 use std::collections::HashMap;
@@ -18,4 +20,6 @@ pub struct AppState {
     pub hotkeys_store: HotkeysStore,
     pub hotkeys: Mutex<Hotkeys>,
     pub playback_settings_store: PlaybackSettingsStore,
+    pub session: SessionState,
+    pub mpris: MprisBridge,
 }

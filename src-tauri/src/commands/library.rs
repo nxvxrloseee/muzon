@@ -34,10 +34,19 @@ pub async fn add_music_folder(app: tauri::AppHandle) -> Result<library::ScanRepo
     .map_err(|e| e.to_string())?
 }
 
+/// Off the UI thread for the same reason as the scan and the cover decode: on
+/// Linux/webkitgtk a synchronous command's IPC dispatch runs on the GTK main
+/// thread, and serialising an entire library there freezes the window for as
+/// long as it takes.
 #[tauri::command]
 #[specta::specta]
-pub fn get_tracks(state: State<AppState>) -> Result<Vec<Track>, String> {
-    library::list_tracks(&state.db).map_err(|e| e.to_string())
+pub async fn get_tracks(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        library::list_tracks(&state.db).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -90,11 +99,22 @@ pub fn toggle_favorite(state: State<AppState>, track_id: i32) -> Result<bool, St
     library::toggle_favorite(&state.db, track_id).map_err(|e| e.to_string())
 }
 
+/// Counts one listen. A single indexed UPDATE, so it stays synchronous - the
+/// reason the two commands above went async is the work they do, not the fact
+/// that they touch the database.
+#[tauri::command]
+#[specta::specta]
+pub fn record_play(state: State<AppState>, track_id: i32) -> Result<(), String> {
+    state.db.record_play(track_id).map_err(|e| e.to_string())
+}
+
+/// Rewrites the file's tags, which is blocking file I/O - and so has no
+/// business running on the GTK main thread either.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]
-pub fn update_track_tags(
-    state: State<AppState>,
+pub async fn update_track_tags(
+    app: tauri::AppHandle,
     path: String,
     title: String,
     artist: Option<String>,
@@ -102,17 +122,22 @@ pub fn update_track_tags(
     track_no: Option<i32>,
     cover_path: Option<String>,
 ) -> Result<Track, String> {
-    state.cover_cache.lock().unwrap().remove(&path);
-    library::update_tags(
-        &state.db,
-        std::path::Path::new(&path),
-        library::TrackEditInput {
-            title,
-            artist,
-            album,
-            track_no,
-            cover_path,
-        },
-    )
-    .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.cover_cache.lock().unwrap().remove(&path);
+        library::update_tags(
+            &state.db,
+            std::path::Path::new(&path),
+            library::TrackEditInput {
+                title,
+                artist,
+                album,
+                track_no,
+                cover_path,
+            },
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

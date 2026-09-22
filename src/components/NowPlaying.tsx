@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown, Pause, Pencil, Play } from "lucide-react";
+import { ChevronDown, CloudDownload, Pause, Pencil, Play } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { lyricsApi } from "../api/lyrics";
 import { useCurrentTrack } from "../hooks/useCurrentTrack";
 import { useTrackPalette, type TrackPalette } from "../hooks/useTrackPalette";
@@ -71,7 +72,17 @@ const LyricLineItem = memo(function LyricLineItem({
   );
 });
 
-function LyricsPanel({ lyrics, onSeek }: { lyrics: Lyrics | null; onSeek: (secs: number) => void }) {
+function LyricsPanel({
+  lyrics,
+  onSeek,
+  onFetch,
+  fetching,
+}: {
+  lyrics: Lyrics | null;
+  onSeek: (secs: number) => void;
+  onFetch: () => void;
+  fetching: boolean;
+}) {
   const timedLines = useMemo<TimedLine[]>(() => {
     if (!lyrics) return [];
     return lyrics.lines.map((line, i) => ({
@@ -81,7 +92,19 @@ function LyricsPanel({ lyrics, onSeek }: { lyrics: Lyrics | null; onSeek: (secs:
   }, [lyrics]);
 
   if (!lyrics || lyrics.lines.length === 0) {
-    return <p className="text-text-secondary">Текст песни не найден (.lrc рядом с файлом)</p>;
+    return (
+      <div className="flex flex-col items-center gap-3">
+        <p className="text-text-secondary">Текст песни не найден (.lrc рядом с файлом)</p>
+        <button
+          onClick={onFetch}
+          disabled={fetching}
+          className="flex items-center gap-1.5 rounded-full bg-card-background/90 px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+        >
+          <CloudDownload size={13} />
+          {fetching ? "Ищем…" : "Найти в LRCLIB"}
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -103,10 +126,33 @@ export function NowPlaying() {
   const track = useCurrentTrack();
   const [lyrics, setLyrics] = useState<Lyrics | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [fetchingLyrics, setFetchingLyrics] = useState(false);
 
   const reloadLyrics = useCallback((path: string) => {
     lyricsApi.getLyrics(path).then(setLyrics);
   }, []);
+
+  // Saved next to the file rather than into the tag: fetched lyrics are a
+  // guess, and a sidecar is the one that can be deleted without rewriting the
+  // audio file itself.
+  const fetchLyrics = useCallback(async () => {
+    if (!currentPath) return;
+    setFetchingLyrics(true);
+    try {
+      const found = await lyricsApi.fetchOnlineLyrics(currentPath);
+      if (!found) {
+        toast.info("В LRCLIB ничего подходящего не нашлось");
+        return;
+      }
+      await lyricsApi.saveLyrics(currentPath, found, false);
+      reloadLyrics(currentPath);
+      toast.success("Текст найден и сохранён рядом с файлом");
+    } catch (e) {
+      toast.error(`Не удалось загрузить текст: ${String(e)}`);
+    } finally {
+      setFetchingLyrics(false);
+    }
+  }, [currentPath, reloadLyrics]);
 
   useEffect(() => {
     setLyrics(null);
@@ -221,7 +267,12 @@ export function NowPlaying() {
               Редактировать текст
             </button>
 
-            <LyricsPanel lyrics={lyrics} onSeek={seek} />
+            <LyricsPanel
+              lyrics={lyrics}
+              onSeek={seek}
+              onFetch={fetchLyrics}
+              fetching={fetchingLyrics}
+            />
           </div>
         </div>
       </div>

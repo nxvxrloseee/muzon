@@ -84,8 +84,6 @@ pub fn update_tags(db: &Db, track_path: &Path, edit: TrackEditInput) -> anyhow::
         mtime,
     })?;
 
-    db.list_tracks()?
-        .into_iter()
-        .find(|t| t.path == path_str)
+    db.track_by_path(&path_str)?
         .ok_or_else(|| anyhow::anyhow!("track not found after tag update"))
 }

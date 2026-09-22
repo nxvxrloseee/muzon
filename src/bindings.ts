@@ -5,7 +5,13 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	addMusicFolder: () => __TAURI_INVOKE<ScanReport>("add_music_folder"),
-	getTracks: () => __TAURI_INVOKE<Track[]>("get_tracks").then((v) => (v.map(i=>({...i,duration_secs:i.duration_secs==null?i.duration_secs:i.duration_secs})) as typeof v)),
+	/**
+	 *  Off the UI thread for the same reason as the scan and the cover decode: on
+	 *  Linux/webkitgtk a synchronous command's IPC dispatch runs on the GTK main
+	 *  thread, and serialising an entire library there freezes the window for as
+	 *  long as it takes.
+	 */
+	getTracks: () => __TAURI_INVOKE<Track[]>("get_tracks").then((v) => (v.map(i=>({...i,duration_secs:i.duration_secs==null?i.duration_secs:i.duration_secs,last_played_at:i.last_played_at==null?i.last_played_at:i.last_played_at})) as typeof v)),
 	getTrackCover: (path: string) => __TAURI_INVOKE<string | null>("get_track_cover", { path }),
 	/**
 	 *  Colors for the Now Playing gradient, taken from the same cached thumbnail
@@ -18,8 +24,18 @@ export const commands = {
 	muted: string,
 	darkMuted: string,
 } | null>("get_track_palette", { path }),
-	updateTrackTags: (path: string, title: string, artist: string | null, album: string | null, trackNo: number | null, coverPath: string | null) => __TAURI_INVOKE<Track>("update_track_tags", { path, title, artist, album, trackNo, coverPath }).then((v) => (({...v,duration_secs:v.duration_secs==null?v.duration_secs:v.duration_secs}) as typeof v)),
+	/**
+	 *  Rewrites the file's tags, which is blocking file I/O - and so has no
+	 *  business running on the GTK main thread either.
+	 */
+	updateTrackTags: (path: string, title: string, artist: string | null, album: string | null, trackNo: number | null, coverPath: string | null) => __TAURI_INVOKE<Track>("update_track_tags", { path, title, artist, album, trackNo, coverPath }).then((v) => (({...v,duration_secs:v.duration_secs==null?v.duration_secs:v.duration_secs,last_played_at:v.last_played_at==null?v.last_played_at:v.last_played_at}) as typeof v)),
 	toggleFavorite: (trackId: number) => __TAURI_INVOKE<boolean>("toggle_favorite", { trackId }),
+	/**
+	 *  Counts one listen. A single indexed UPDATE, so it stays synchronous - the
+	 *  reason the two commands above went async is the work they do, not the fact
+	 *  that they touch the database.
+	 */
+	recordPlay: (trackId: number) => __TAURI_INVOKE<null>("record_play", { trackId }),
 	getLyrics: (path: string) => __TAURI_INVOKE<{
 	lines: LrcLine[],
 } | null>("get_lyrics", { path }).then((v) => (v==null?v:({...v,lines:v.lines.map(i=>({...i,words:i.words==null?i.words:i.words.map(i=>i)}))}) as typeof v)),
@@ -30,6 +46,16 @@ export const commands = {
 	 */
 	getLyricsSourceText: (path: string) => __TAURI_INVOKE<string>("get_lyrics_source_text", { path }),
 	saveLyrics: (path: string, content: string, storeInTag: boolean) => __TAURI_INVOKE<null>("save_lyrics", { path, content, storeInTag }),
+	/**
+	 *  Looks the track's lyrics up on LRCLIB and returns the LRC text, or `None`
+	 *  when nothing convincing was found.
+	 * 
+	 *  Deliberately an explicit action rather than something that happens on every
+	 *  track change: this is the only outbound request the app makes, and a local
+	 *  music player reaching for the network unprompted is a surprise. Saving is
+	 *  left to the caller too, so the existing tag-or-sidecar choice still applies.
+	 */
+	fetchOnlineLyrics: (path: string) => __TAURI_INVOKE<string | null>("fetch_online_lyrics", { path }),
 	playTrack: (path: string) => __TAURI_INVOKE<null>("play_track", { path }),
 	togglePlay: () => __TAURI_INVOKE<null>("toggle_play"),
 	pausePlayback: () => __TAURI_INVOKE<null>("pause_playback"),
@@ -53,6 +79,35 @@ export const commands = {
 	 *  live audio side immediately.
 	 */
 	setTrackTempo: (trackId: number, tempo: number) => __TAURI_INVOKE<null>("set_track_tempo", { trackId, tempo }),
+	/**
+	 *  Loads `path` paused at `position_secs`. This is session restore: the app
+	 *  comes back with the track it was closed on sitting exactly where it was,
+	 *  without starting to play by itself.
+	 */
+	restoreTrack: (path: string, positionSecs: number) => __TAURI_INVOKE<null>("restore_track", { path, positionSecs }),
+	getSession: () => __TAURI_INVOKE<Session>("get_session"),
+	/**
+	 *  Replaces the queue half of the session. Split from `set_session_progress`
+	 *  because the queue is the big, rarely-changing part - playing a whole library
+	 *  as one queue is one path per track, and it must not cross the IPC boundary
+	 *  again every few seconds just because the playhead moved.
+	 */
+	setSessionQueue: (queuePaths: string[], shuffleOrder: number[]) => __TAURI_INVOKE<void>("set_session_queue", { queuePaths, shuffleOrder }),
+	/**
+	 *  The cheap, frequently-updated half: where playback is and how it's
+	 *  configured. In-memory only - `save_session` owns the disk write.
+	 */
+	setSessionProgress: (cursor: number, positionSecs: number, volume: number, shuffle: boolean, repeat: RepeatMode) => __TAURI_INVOKE<void>("set_session_progress", { cursor, positionSecs, volume, shuffle, repeat }),
+	/**
+	 *  Flushes the in-memory session to disk. A no-op when nothing has changed
+	 *  since the last flush.
+	 */
+	saveSession: () => __TAURI_INVOKE<null>("save_session"),
+	/**
+	 *  Whether the frontend should draw its own window controls, decided from the
+	 *  session the app was launched into. See `domain::window_chrome`.
+	 */
+	getWindowControlsVisible: () => __TAURI_INVOKE<boolean>("get_window_controls_visible"),
 	getTheme: () => __TAURI_INVOKE<Theme>("get_theme"),
 	setTheme: (theme: Theme) => __TAURI_INVOKE<null>("set_theme", { theme }),
 	getDefaultTheme: (mode: string) => __TAURI_INVOKE<Theme>("get_default_theme", { mode }),
@@ -64,7 +119,7 @@ export const commands = {
 	createPlaylist: (name: string) => __TAURI_INVOKE<Playlist>("create_playlist", { name }),
 	renamePlaylist: (id: number, name: string) => __TAURI_INVOKE<null>("rename_playlist", { id, name }),
 	deletePlaylist: (id: number) => __TAURI_INVOKE<null>("delete_playlist", { id }),
-	getPlaylistTracks: (id: number) => __TAURI_INVOKE<Track[]>("get_playlist_tracks", { id }).then((v) => (v.map(i=>({...i,duration_secs:i.duration_secs==null?i.duration_secs:i.duration_secs})) as typeof v)),
+	getPlaylistTracks: (id: number) => __TAURI_INVOKE<Track[]>("get_playlist_tracks", { id }).then((v) => (v.map(i=>({...i,duration_secs:i.duration_secs==null?i.duration_secs:i.duration_secs,last_played_at:i.last_played_at==null?i.last_played_at:i.last_played_at})) as typeof v)),
 	addTrackToPlaylist: (playlistId: number, trackId: number) => __TAURI_INVOKE<null>("add_track_to_playlist", { playlistId, trackId }),
 	removeTrackFromPlaylist: (playlistId: number, trackId: number) => __TAURI_INVOKE<null>("remove_track_from_playlist", { playlistId, trackId }),
 	reorderPlaylistTracks: (playlistId: number, trackIds: number[]) => __TAURI_INVOKE<null>("reorder_playlist_tracks", { playlistId, trackIds }),
@@ -97,6 +152,22 @@ export type Lyrics = {
 	lines: LrcLine[],
 };
 
+/**
+ *  A GStreamer error message that reached one of the decks, on its way to a
+ *  toast in the UI.
+ */
+export type PlaybackError = {
+	/**  The file that failed, when the deck that raised it had one loaded. */
+	path: string | null,
+	message: string,
+	/**
+	 *  True when the failure hit the deck that was actually playing - audio has
+	 *  stopped and the queue needs to move on. False when it was the pre-rolled
+	 *  standby deck, where only the pre-load was lost and playback continues.
+	 */
+	fatal: boolean,
+};
+
 export type PlaybackSettings = {
 	/**  0 = gapless (no fade), > 0 = crossfade duration in seconds. */
 	crossfadeSecs: number,
@@ -121,6 +192,13 @@ export type PlaybackTick = {
 	 *  without re-invoking play (which would interrupt the seamless transition).
 	 */
 	auto_advanced_to: string | null,
+	/**
+	 *  One-shot pulse: an error drained off a deck's bus this tick. Everything
+	 *  that wasn't EOS used to be discarded here, so a missing codec or an
+	 *  unreadable file left playback silently stalled with nothing said and the
+	 *  queue never advancing.
+	 */
+	error: PlaybackError | null,
 };
 
 export type Playlist = {
@@ -129,11 +207,39 @@ export type Playlist = {
 	track_count: number,
 };
 
+export type RepeatMode = "off" | "all" | "one";
+
 export type ScanReport = {
 	added: number,
 	updated: number,
 	removed: number,
 	errors: string[],
+};
+
+/**
+ *  What the app puts back after a restart: the queue you were listening to, the
+ *  track you were on and how far into it, plus the switches that shape playback.
+ *  Restored paused - an app that starts blaring the moment it launches is not
+ *  what anyone means by "remember where I was".
+ * 
+ *  Tracks are stored as paths rather than row ids so a re-scan that renumbers
+ *  the library (or a database rebuilt from scratch) still restores the same
+ *  files.
+ */
+export type Session = {
+	/**  The queue in library order, exactly as the queue store holds it. */
+	queuePaths?: string[],
+	/**
+	 *  The shuffle permutation, kept so relaunching mid-shuffle continues the
+	 *  order you were part-way through instead of drawing a new one.
+	 */
+	shuffleOrder?: number[],
+	/**  Index into `queue_paths`, or -1 when nothing was playing. */
+	cursor?: number,
+	shuffle?: boolean,
+	repeat?: RepeatMode,
+	positionSecs?: number,
+	volume?: number,
 };
 
 export type Theme = {
@@ -165,6 +271,23 @@ export type Track = {
 	is_favorite: boolean,
 	/**  Playback speed multiplier without pitch shift; 1.0 = normal. */
 	tempo: number,
+	/**
+	 *  How many times this has been listened to far enough to count. See
+	 *  `lib/playThreshold` on the frontend for what "far enough" means.
+	 */
+	play_count: number,
+	/**
+	 *  Unix seconds, or null if never played. `f64` rather than `i64` because
+	 *  specta refuses to export 64-bit integers (they lose precision in JS) -
+	 *  and a second count is exact in a double for the next several million
+	 *  years, so nothing is given up by saying so.
+	 */
+	last_played_at: number | null,
+	/**
+	 *  Unix seconds of when the library first saw the file. Backfilled from the
+	 *  file's mtime for rows that predate the column.
+	 */
+	added_at: number,
 };
 
 /**  The four swatches the Now Playing background gradient is built from. */

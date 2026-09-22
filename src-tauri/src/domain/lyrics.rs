@@ -116,9 +116,106 @@ fn parse_words(s: &str) -> (String, Vec<LrcWord>) {
     (plain.trim().to_string(), words)
 }
 
+/// How far a candidate's duration may be from the track's before it is taken to
+/// be a different recording. LRCLIB matches within a couple of seconds itself;
+/// stricter than this rejects legitimate hits (encoders disagree about trailing
+/// silence), looser starts attaching another song's timings.
+const DURATION_TOLERANCE_SECS: f64 = 3.0;
+
+/// The parts of a lyrics search result that decide whether it is the right one.
+pub struct Match {
+    pub has_synced: bool,
+    pub duration_secs: Option<f64>,
+}
+
+/// Index of the candidate most likely to be this recording, if any.
+///
+/// Timed lyrics beat plain text outright: the whole lyrics view is built on
+/// timings, and untimed text is only worth having as a last resort. Among
+/// equals the closest duration wins. When the track's own duration is known,
+/// anything outside the tolerance is dropped rather than guessed at - no lyrics
+/// is a much better answer than confidently showing another song's.
+pub fn pick_best_match(candidates: &[Match], duration_secs: Option<f64>) -> Option<usize> {
+    candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            let distance = match (duration_secs, candidate.duration_secs) {
+                (Some(wanted), Some(found)) => {
+                    let distance = (wanted - found).abs();
+                    if distance > DURATION_TOLERANCE_SECS {
+                        return None;
+                    }
+                    distance
+                }
+                // Unknown on either side: acceptable, but ranked behind anything
+                // that could actually be compared.
+                _ => f64::INFINITY,
+            };
+            Some((index, candidate.has_synced, distance))
+        })
+        .min_by(|a, b| b.1.cmp(&a.1).then(a.2.total_cmp(&b.2)))
+        .map(|(index, _, _)| index)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn candidate(has_synced: bool, duration_secs: Option<f64>) -> Match {
+        Match {
+            has_synced,
+            duration_secs,
+        }
+    }
+
+    #[test]
+    fn timed_lyrics_win_over_plain_ones() {
+        let candidates = [candidate(false, Some(200.0)), candidate(true, Some(200.0))];
+        assert_eq!(pick_best_match(&candidates, Some(200.0)), Some(1));
+    }
+
+    #[test]
+    fn among_equals_the_closest_duration_wins() {
+        let candidates = [
+            candidate(true, Some(202.0)),
+            candidate(true, Some(200.5)),
+            candidate(true, Some(198.0)),
+        ];
+        assert_eq!(pick_best_match(&candidates, Some(200.0)), Some(1));
+    }
+
+    #[test]
+    fn a_recording_of_the_wrong_length_is_rejected_outright() {
+        // A live version twice the length is not this song, however confident
+        // the search was about the title.
+        let candidates = [candidate(true, Some(400.0))];
+        assert_eq!(pick_best_match(&candidates, Some(200.0)), None);
+    }
+
+    #[test]
+    fn a_close_enough_duration_still_counts() {
+        let candidates = [candidate(true, Some(202.5))];
+        assert_eq!(pick_best_match(&candidates, Some(200.0)), Some(0));
+    }
+
+    #[test]
+    fn plain_lyrics_of_the_right_length_beat_timed_ones_of_the_wrong_length() {
+        let candidates = [candidate(true, Some(400.0)), candidate(false, Some(200.0))];
+        assert_eq!(pick_best_match(&candidates, Some(200.0)), Some(1));
+    }
+
+    #[test]
+    fn an_unknown_duration_falls_back_to_preferring_timed_lyrics() {
+        let candidates = [candidate(false, Some(200.0)), candidate(true, None)];
+        assert_eq!(pick_best_match(&candidates, None), Some(1));
+    }
+
+    #[test]
+    fn nothing_to_choose_from_is_not_a_match() {
+        assert_eq!(pick_best_match(&[], Some(200.0)), None);
+    }
+
 
     #[test]
     fn parses_basic_line_level_lrc() {

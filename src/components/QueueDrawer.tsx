@@ -1,45 +1,100 @@
 import { Drawer } from "vaul";
-import { ListOrdered, Repeat, Repeat1, Shuffle, X } from "lucide-react";
+import { GripVertical, ListOrdered, Repeat, Repeat1, Shuffle, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { identityIndices, rotateToStart } from "../lib/shuffle";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import type { Track } from "../types";
 import { TrackCover } from "./TrackCover";
 import { VirtualizedList } from "./VirtualizedList";
 
-function identityIndices(length: number): number[] {
-  return Array.from({ length }, (_, i) => i);
+interface QueueRowProps {
+  track: Track;
+  /** Position in the drawer's own rotated view, which is also how a drag and a
+   * removal are addressed. */
+  index: number;
+  isActive: boolean;
+  isDropTarget: boolean;
+  onPlay: () => void;
+  onRemove: () => void;
+  onDragStart: () => void;
+  onDragEnter: () => void;
+  onDragEnd: () => void;
+  onDrop: () => void;
 }
 
-function rotateToStart(order: number[], startValue: number): number[] {
-  const p = order.indexOf(startValue);
-  if (p <= 0) return order;
-  return [...order.slice(p), ...order.slice(0, p)];
-}
+function QueueRow({
+  track,
+  index,
+  isActive,
+  isDropTarget,
+  onPlay,
+  onRemove,
+  onDragStart,
+  onDragEnter,
+  onDragEnd,
+  onDrop,
+}: QueueRowProps) {
+  // The playing track is pinned to the top of this view by the rotation, so
+  // dragging it would look like nothing happened. Everything below it moves.
+  const draggable = index > 0;
 
-function QueueRow({ track, isActive, onPlay }: { track: Track; isActive: boolean; onPlay: () => void }) {
   return (
-    <button
-      onClick={onPlay}
-      className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors ${
+    <div
+      draggable={draggable}
+      onDragStart={(e) => {
+        // Firefox refuses to start a drag without payload, and WebKit wants a
+        // type it recognises.
+        e.dataTransfer.setData("text/plain", String(index));
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart();
+      }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragEnter={onDragEnter}
+      onDragEnd={onDragEnd}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDrop();
+      }}
+      className={`group flex items-center gap-2 rounded-md px-2 py-2 transition-colors ${
         isActive ? "bg-card-hover" : "hover:bg-card-hover"
-      }`}
+      } ${isDropTarget ? "outline outline-1 outline-accent-primary" : ""}`}
     >
-      <TrackCover
-        path={track.path}
-        className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-background"
-      />
-      <div className="min-w-0">
-        <div
-          className={`truncate text-sm ${isActive ? "text-karaoke-active-word-highlight" : "text-text-primary"}`}
-        >
-          {track.title}
+      <span
+        className={`flex h-5 w-4 flex-shrink-0 items-center justify-center text-text-secondary ${
+          draggable ? "cursor-grab opacity-0 group-hover:opacity-100" : "opacity-0"
+        }`}
+      >
+        <GripVertical size={13} />
+      </span>
+
+      <button onClick={onPlay} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+        <TrackCover
+          path={track.path}
+          className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-card-background"
+        />
+        <div className="min-w-0">
+          <div
+            className={`truncate text-sm ${
+              isActive ? "text-karaoke-active-word-highlight" : "text-text-primary"
+            }`}
+          >
+            {track.title}
+          </div>
+          <div className="truncate text-xs text-text-secondary">
+            {track.artist ?? "Неизвестный исполнитель"}
+          </div>
         </div>
-        <div className="truncate text-xs text-text-secondary">
-          {track.artist ?? "Неизвестный исполнитель"}
-        </div>
-      </div>
-    </button>
+      </button>
+
+      <button
+        onClick={onRemove}
+        title="Убрать из очереди"
+        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-text-secondary opacity-0 transition-opacity hover:bg-card-background hover:text-text-primary group-hover:opacity-100"
+      >
+        <X size={13} />
+      </button>
+    </div>
   );
 }
 
@@ -53,8 +108,16 @@ export function QueueDrawer() {
   const toggleShuffle = useQueueStore((s) => s.toggleShuffle);
   const cycleRepeat = useQueueStore((s) => s.cycleRepeat);
   const playAtQueueIndex = useQueueStore((s) => s.playAtQueueIndex);
+  const removeFromQueue = useQueueStore((s) => s.removeFromQueue);
+  const moveInView = useQueueStore((s) => s.moveInView);
   const currentPath = usePlayerStore((s) => s.currentPath);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
+
+  // Where a drag started and where it currently hovers, both as positions in
+  // this view. Held here rather than per row so a row can tell whether it is
+  // the one about to be displaced.
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
 
   const rotatedIndices = useMemo(() => {
     if (queue.length === 0) return [];
@@ -66,6 +129,14 @@ export function QueueDrawer() {
     () => rotatedIndices.map((i) => queue[i]).filter(Boolean),
     [rotatedIndices, queue],
   );
+
+  function finishDrag() {
+    if (dragFrom !== null && dragOver !== null && dragFrom !== dragOver) {
+      moveInView(dragFrom, dragOver);
+    }
+    setDragFrom(null);
+    setDragOver(null);
+  }
 
   const repeatIcon = repeat === "one" ? <Repeat1 size={16} /> : <Repeat size={16} />;
   const repeatLabel =
@@ -130,6 +201,9 @@ export function QueueDrawer() {
                 // Windowed like every other track list: a queue is as long as
                 // whatever list it was started from, so an unvirtualized one
                 // mounted a row (and requested a cover) per library track.
+                // Reordering here is native HTML5 drag and drop rather than a
+                // Motion `Reorder.Group`, precisely because it addresses rows by
+                // index and so needs no unmounted sibling to be measurable.
                 <VirtualizedList
                   items={ordered}
                   scrollElementRef={scrollWrapperRef}
@@ -139,8 +213,15 @@ export function QueueDrawer() {
                   renderItem={(track, i) => (
                     <QueueRow
                       track={track}
+                      index={i}
                       isActive={rotatedIndices[i] === cursor && track.path === currentPath}
+                      isDropTarget={dragFrom !== null && dragOver === i && dragFrom !== i}
                       onPlay={() => playAtQueueIndex(rotatedIndices[i])}
+                      onRemove={() => removeFromQueue(rotatedIndices[i])}
+                      onDragStart={() => setDragFrom(i)}
+                      onDragEnter={() => setDragOver(i)}
+                      onDragEnd={finishDrag}
+                      onDrop={finishDrag}
                     />
                   )}
                 />

@@ -1,29 +1,28 @@
 import { create } from "zustand";
 import { playerApi } from "../api/player";
+import {
+  appendTracks,
+  insertAfterCursor,
+  moveInView as moveInViewOp,
+  removeAt,
+  type QueueShape,
+} from "../lib/queueOps";
+import { identityIndices, rotateToStart, shuffledIndices } from "../lib/shuffle";
 import { usePlayerStore } from "./playerStore";
-import type { Track } from "../types";
+import type { RepeatMode, Track } from "../types";
 
-export type RepeatMode = "off" | "all" | "one";
+export type { RepeatMode };
 
-function shuffledIndices(length: number): number[] {
-  const idx = Array.from({ length }, (_, i) => i);
-  for (let i = idx.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [idx[i], idx[j]] = [idx[j], idx[i]];
-  }
-  return idx;
+/** A saved session's queue, ready to be put back without playing anything. */
+export interface QueueSnapshot {
+  queue: Track[];
+  shuffleOrder: number[];
+  cursor: number;
+  shuffle: boolean;
+  repeat: RepeatMode;
+  positionSecs: number;
 }
 
-function identityIndices(length: number): number[] {
-  return Array.from({ length }, (_, i) => i);
-}
-
-/** Rotates `order` so `startValue` is first, wrapping the rest around after it. */
-function rotateToStart(order: number[], startValue: number): number[] {
-  const p = order.indexOf(startValue);
-  if (p <= 0) return order;
-  return [...order.slice(p), ...order.slice(0, p)];
-}
 
 interface QueueState {
   /** Base track list snapshot, in library order, from whichever list the user played from. */
@@ -40,6 +39,10 @@ interface QueueState {
   setQueue: (tracks: Track[], startTrack: Track) => Promise<void>;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
+  /** Direct setters, for anything that names the state it wants rather than
+   * stepping to the next one - the desktop's media widget, notably. */
+  setShuffle: (shuffle: boolean) => void;
+  setRepeat: (repeat: RepeatMode) => void;
   playAtQueueIndex: (queueIndex: number) => Promise<void>;
   playNext: () => Promise<void>;
   playPrevious: () => Promise<void>;
@@ -52,6 +55,29 @@ interface QueueState {
   /** Called when the backend reports a gapless/crossfade transition that already
    * happened on its own; moves the cursor to match without re-invoking play. */
   syncCursorToPath: (path: string) => void;
+  /** Puts a previous run's queue back without starting playback: the cursor's
+   * track is loaded paused where it was left, so pressing play resumes rather
+   * than restarts. */
+  restore: (snapshot: QueueSnapshot) => Promise<void>;
+
+  /** Adds to the end of the queue. Starts playing when there was nothing
+   * queued at all, since "add to queue" on an idle player otherwise looks like
+   * it did nothing. */
+  enqueue: (tracks: Track[]) => Promise<void>;
+  /** Adds so the tracks play right after the current one. */
+  playNextInQueue: (tracks: Track[]) => Promise<void>;
+  /** Drops one track. Removing the one playing moves on to whatever followed
+   * it, or stops when it was the last. */
+  removeFromQueue: (queueIndex: number) => Promise<void>;
+  /** Moves an entry, addressed by its position in the queue view - which shows
+   * the play order rotated so the playing track is first. */
+  moveInView: (fromPosition: number, toPosition: number) => void;
+}
+
+/** The queue's index-bearing fields on their own, for the pure helpers in
+ * `lib/queueOps` that do the actual bookkeeping. */
+function shapeOf(state: QueueState): QueueShape<Track> {
+  return { queue: state.queue, shuffleOrder: state.shuffleOrder, cursor: state.cursor };
 }
 
 function pushNextTrackToBackend(get: () => QueueState) {
@@ -76,8 +102,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   },
 
   toggleShuffle: () => {
-    set((s) => ({ shuffle: !s.shuffle }));
-    pushNextTrackToBackend(get);
+    get().setShuffle(!get().shuffle);
   },
 
   cycleRepeat: () => {
@@ -86,7 +111,18 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       all: "one",
       one: "off",
     };
-    set((s) => ({ repeat: next[s.repeat] }));
+    get().setRepeat(next[get().repeat]);
+  },
+
+  setShuffle: (shuffle) => {
+    if (get().shuffle === shuffle) return;
+    set({ shuffle });
+    pushNextTrackToBackend(get);
+  },
+
+  setRepeat: (repeat) => {
+    if (get().repeat === repeat) return;
+    set({ repeat });
     pushNextTrackToBackend(get);
   },
 
@@ -148,6 +184,67 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const index = get().queue.findIndex((t) => t.path === path);
     if (index === -1) return;
     set({ cursor: index });
+    pushNextTrackToBackend(get);
+  },
+
+  restore: async ({ queue, shuffleOrder, cursor, shuffle, repeat, positionSecs }) => {
+    set({ queue, shuffleOrder, cursor, shuffle, repeat });
+    const track = queue[cursor];
+    if (!track) return;
+    await usePlayerStore.getState().restore(track, positionSecs);
+    // Arm the follow-up exactly as starting playback normally would, so the
+    // first transition after a restore isn't the one that stutters.
+    pushNextTrackToBackend(get);
+  },
+
+  enqueue: async (tracks) => {
+    if (tracks.length === 0) return;
+    const wasEmpty = get().queue.length === 0;
+    set(appendTracks(shapeOf(get()), tracks));
+    if (wasEmpty) {
+      await get().playAtQueueIndex(0);
+      return;
+    }
+    pushNextTrackToBackend(get);
+  },
+
+  playNextInQueue: async (tracks) => {
+    if (tracks.length === 0) return;
+    const wasEmpty = get().queue.length === 0;
+    set(insertAfterCursor(shapeOf(get()), tracks));
+    if (wasEmpty) {
+      await get().playAtQueueIndex(0);
+      return;
+    }
+    pushNextTrackToBackend(get);
+  },
+
+  removeFromQueue: async (queueIndex) => {
+    const state = get();
+    // `shapeOf` builds a fresh object each call, so the no-op check has to
+    // compare against the very one that was handed to `removeAt`.
+    const before = shapeOf(state);
+    const { shape, wasCurrent, nextCursor } = removeAt(before, queueIndex, state.shuffle);
+    if (shape === before) return;
+    set(shape);
+
+    if (!wasCurrent) {
+      pushNextTrackToBackend(get);
+      return;
+    }
+    if (nextCursor >= 0) {
+      await get().playAtQueueIndex(nextCursor);
+    } else {
+      await usePlayerStore.getState().stop();
+      pushNextTrackToBackend(get);
+    }
+  },
+
+  moveInView: (fromPosition, toPosition) => {
+    const state = get();
+    set(moveInViewOp(shapeOf(state), state.shuffle, fromPosition, toPosition));
+    // What plays next may well have changed, and the backend still has the old
+    // one armed.
     pushNextTrackToBackend(get);
   },
 }));

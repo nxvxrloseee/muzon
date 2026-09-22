@@ -12,6 +12,9 @@ interface LibraryState {
   updateTrackTags: (path: string, edit: TrackEdit) => Promise<void>;
   toggleFavorite: (trackId: number) => Promise<void>;
   setFavorite: (trackId: number, favorite: boolean) => Promise<void>;
+  /** Counts one listen. The local copy is bumped straight away so a sort by
+   * play count reorders as you listen, without re-reading the whole library. */
+  recordPlay: (trackId: number) => Promise<void>;
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -63,6 +66,19 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     set((s) => ({
       tracks: s.tracks.map((t) => (t.id === trackId ? { ...t, is_favorite: isFavorite } : t)),
     }));
+  },
+  recordPlay: async (trackId) => {
+    const playedAt = Math.floor(Date.now() / 1000);
+    set((s) => ({
+      tracks: s.tracks.map((t) =>
+        t.id === trackId
+          ? { ...t, play_count: t.play_count + 1, last_played_at: playedAt }
+          : t,
+      ),
+    }));
+    await libraryApi
+      .recordPlay(trackId)
+      .catch((e) => console.error("Failed to record play", e));
   },
   setFavorite: async (trackId, favorite) => {
     const track = get().tracks.find((t) => t.id === trackId);

@@ -35,6 +35,9 @@ function track(id: number, title = `Track ${id}`): Track {
     track_no: null,
     is_favorite: false,
     tempo: 1,
+    play_count: 0,
+    last_played_at: null,
+    added_at: 0,
   };
 }
 

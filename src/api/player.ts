@@ -15,6 +15,7 @@ export const playerApi = {
     return commands.subscribePlaybackTicks(channel);
   },
   setNextTrack: (path: string | null) => commands.setNextTrack(path),
+  restoreTrack: (path: string, positionSecs: number) => commands.restoreTrack(path, positionSecs),
   getPlaybackSettings: () => commands.getPlaybackSettings(),
   setCrossfadeSeconds: (secs: number) => commands.setCrossfadeSeconds(secs),
   saveCrossfadeSeconds: (secs: number) => commands.saveCrossfadeSeconds(secs),

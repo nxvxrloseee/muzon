@@ -18,6 +18,46 @@ pub struct Db {
     conn: Mutex<Connection>,
 }
 
+/// Every column of `tracks`, in the order `row_to_track` reads them. One list
+/// rather than three copies that have to be kept in step by hand.
+const TRACK_COLUMNS: &str = "id, path, title, artist, album, duration_secs, track_no, \
+     is_favorite, tempo, play_count, last_played_at, added_at";
+
+fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {
+    Ok(Track {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        title: row.get(2)?,
+        artist: row.get(3)?,
+        album: row.get(4)?,
+        duration_secs: row.get(5)?,
+        track_no: row.get(6)?,
+        is_favorite: row.get(7)?,
+        tempo: row.get(8)?,
+        play_count: row.get(9)?,
+        last_played_at: row.get(10)?,
+        added_at: row.get(11)?,
+    })
+}
+
+/// Adds a column to `tracks` unless this database already has it, reporting
+/// whether it was the one to add it. The app has shipped, so the schema has to
+/// grow under existing libraries rather than being recreated under them.
+fn add_column_if_missing(
+    conn: &Connection,
+    column: &str,
+    definition: &str,
+) -> rusqlite::Result<bool> {
+    if conn
+        .prepare(&format!("SELECT {column} FROM tracks LIMIT 1"))
+        .is_ok()
+    {
+        return Ok(false);
+    }
+    conn.execute(&format!("ALTER TABLE tracks ADD COLUMN {definition}"), [])?;
+    Ok(true)
+}
+
 impl Db {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
@@ -59,22 +99,15 @@ impl Db {
             );",
         )?;
 
-        let has_favorite_column = conn
-            .prepare("SELECT is_favorite FROM tracks LIMIT 1")
-            .is_ok();
-        if !has_favorite_column {
-            conn.execute(
-                "ALTER TABLE tracks ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
-
-        let has_tempo_column = conn.prepare("SELECT tempo FROM tracks LIMIT 1").is_ok();
-        if !has_tempo_column {
-            conn.execute(
-                "ALTER TABLE tracks ADD COLUMN tempo REAL NOT NULL DEFAULT 1.0",
-                [],
-            )?;
+        add_column_if_missing(&conn, "is_favorite", "is_favorite INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&conn, "tempo", "tempo REAL NOT NULL DEFAULT 1.0")?;
+        add_column_if_missing(&conn, "play_count", "play_count INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&conn, "last_played_at", "last_played_at INTEGER")?;
+        if add_column_if_missing(&conn, "added_at", "added_at INTEGER NOT NULL DEFAULT 0")? {
+            // Nothing recorded when the existing rows were added, and the file's
+            // own mtime is the closest thing to it - better than presenting a
+            // whole library as having appeared at the epoch.
+            conn.execute("UPDATE tracks SET added_at = mtime", [])?;
         }
 
         Ok(Self {
@@ -113,8 +146,8 @@ impl Db {
     pub fn upsert_track(&self, t: &NewTrack) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO tracks (path, title, artist, album, duration_secs, track_no, mtime)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO tracks (path, title, artist, album, duration_secs, track_no, mtime, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s','now'))
              ON CONFLICT(path) DO UPDATE SET
                 title = excluded.title,
                 artist = excluded.artist,
@@ -148,8 +181,8 @@ impl Db {
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO tracks (path, title, artist, album, duration_secs, track_no, mtime)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO tracks (path, title, artist, album, duration_secs, track_no, mtime, added_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s','now'))
                  ON CONFLICT(path) DO UPDATE SET
                     title = excluded.title,
                     artist = excluded.artist,
@@ -181,24 +214,37 @@ impl Db {
 
     pub fn list_tracks(&self) -> rusqlite::Result<Vec<Track>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, path, title, artist, album, duration_secs, track_no, is_favorite, tempo
-             FROM tracks ORDER BY artist, album, track_no, title",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Track {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                title: row.get(2)?,
-                artist: row.get(3)?,
-                album: row.get(4)?,
-                duration_secs: row.get(5)?,
-                track_no: row.get(6)?,
-                is_favorite: row.get(7)?,
-                tempo: row.get(8)?,
-            })
-        })?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {TRACK_COLUMNS} FROM tracks ORDER BY artist, album, track_no, title"
+        ))?;
+        let rows = stmt.query_map([], row_to_track)?;
         rows.collect()
+    }
+
+    /// Single-row lookup by path. The MPRIS metadata builder needs exactly this
+    /// and used to pull the entire library and scan it linearly for every
+    /// property read the desktop shell made.
+    pub fn track_by_path(&self, path: &str) -> rusqlite::Result<Option<Track>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            &format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE path = ?1"),
+            [path],
+            row_to_track,
+        )
+        .optional()
+    }
+
+    /// Counts one listen. Deliberately not part of any upsert: like favourites
+    /// and tempo, this is history the scanner must never touch.
+    pub fn record_play(&self, track_id: i32) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tracks
+             SET play_count = play_count + 1, last_played_at = strftime('%s','now')
+             WHERE id = ?1",
+            [track_id],
+        )?;
+        Ok(())
     }
 
     /// Writes the per-track saved tempo. Kept separate from `upsert_track` since
@@ -273,26 +319,16 @@ impl Db {
 
     pub fn playlist_tracks(&self, playlist_id: i32) -> rusqlite::Result<Vec<Track>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT t.id, t.path, t.title, t.artist, t.album, t.duration_secs, t.track_no, t.is_favorite, t.tempo
+        // Unaliased, so the shared column list works here too: none of
+        // `playlist_tracks`' own columns collide with the track ones.
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {TRACK_COLUMNS}
              FROM playlist_tracks pt
-             JOIN tracks t ON t.id = pt.track_id
+             JOIN tracks ON tracks.id = pt.track_id
              WHERE pt.playlist_id = ?1
-             ORDER BY pt.position",
-        )?;
-        let rows = stmt.query_map([playlist_id], |row| {
-            Ok(Track {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                title: row.get(2)?,
-                artist: row.get(3)?,
-                album: row.get(4)?,
-                duration_secs: row.get(5)?,
-                track_no: row.get(6)?,
-                is_favorite: row.get(7)?,
-                tempo: row.get(8)?,
-            })
-        })?;
+             ORDER BY pt.position"
+        ))?;
+        let rows = stmt.query_map([playlist_id], row_to_track)?;
         rows.collect()
     }
 
@@ -440,6 +476,64 @@ mod tests {
         db.upsert_track(&sample("/a.mp3", "Retitled", "Artist", "Album", 1))
             .unwrap();
         assert_eq!(db.list_tracks().unwrap()[0].tempo, 1.25);
+    }
+
+    #[test]
+    fn track_by_path_finds_the_row_and_is_none_for_unknown_paths() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_track(&sample("/a.mp3", "A", "Artist", "Album", 1))
+            .unwrap();
+
+        let found = db.track_by_path("/a.mp3").unwrap().unwrap();
+        assert_eq!(found.title, "A");
+        assert_eq!(found.artist.as_deref(), Some("Artist"));
+        assert!(db.track_by_path("/missing.mp3").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_new_track_has_never_been_played() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_track(&sample("/a.mp3", "A", "Artist", "Album", 1))
+            .unwrap();
+        let track = &db.list_tracks().unwrap()[0];
+        assert_eq!(track.play_count, 0);
+        assert_eq!(track.last_played_at, None);
+        assert!(track.added_at > 0.0, "added_at is stamped on insert");
+    }
+
+    #[test]
+    fn recording_a_play_counts_it_and_dates_it() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_track(&sample("/a.mp3", "A", "Artist", "Album", 1))
+            .unwrap();
+        let id = db.list_tracks().unwrap()[0].id;
+
+        db.record_play(id).unwrap();
+        db.record_play(id).unwrap();
+
+        let track = &db.list_tracks().unwrap()[0];
+        assert_eq!(track.play_count, 2);
+        assert!(track.last_played_at.is_some());
+    }
+
+    #[test]
+    fn listening_history_survives_a_rescan() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_track(&sample("/a.mp3", "A", "Artist", "Album", 1))
+            .unwrap();
+        let id = db.list_tracks().unwrap()[0].id;
+        db.record_play(id).unwrap();
+        let added_at = db.list_tracks().unwrap()[0].added_at;
+
+        // Same reasoning as favourites and tempo: re-reading a file's tags must
+        // not reset what the listener did with it, nor claim it was just added.
+        db.upsert_track(&sample("/a.mp3", "Retitled", "Artist", "Album", 1))
+            .unwrap();
+
+        let track = &db.list_tracks().unwrap()[0];
+        assert_eq!(track.title, "Retitled");
+        assert_eq!(track.play_count, 1);
+        assert_eq!(track.added_at, added_at);
     }
 
     #[test]

@@ -2,19 +2,72 @@ mod commands;
 mod data;
 mod domain;
 mod state;
+#[cfg(test)]
+mod testing;
 
-use data::audio::pipeline::AudioPlayer;
+use data::audio::pipeline::{AudioPlayer, PlaybackError, PlaybackTick};
 use data::db::Db;
 use data::hotkeys_store::HotkeysStore;
-use data::mpris::MprisPlayer;
+use data::mpris::{self, MprisPlayer};
 use data::playback_settings_store::PlaybackSettingsStore;
+use data::session_store::{SessionState, SessionStore};
 use data::theme_store::ThemeStore;
+use mpris_server::Property;
 use state::AppState;
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::Manager;
 use tauri_specta::{collect_commands, Builder};
+
+const POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// While a crossfade is ramping, the poll rate *is* the ramp's step rate, and a
+/// short fade stepped five times a second is audibly a staircase rather than a
+/// fade. Only in force while one is actually in flight.
+const CROSSFADE_POLL_INTERVAL: Duration = Duration::from_millis(40);
+
+/// How often the frontend hears about playback - deliberately unchanged by the
+/// faster polling above, since every one of these wakes its subscribers.
+const FRONTEND_TICK_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How often the polling thread flushes the session to disk. The frontend keeps
+/// the backend's in-memory copy current continuously and writes it out exactly
+/// on window close, so this only bounds what an unclean exit can lose.
+const SESSION_FLUSH_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The one-shot fields of every tick since the last one the frontend was sent.
+///
+/// Polling faster than we report means a pulse - a track ending, a gapless
+/// hand-off, an error - can land on a tick that is never forwarded. Collecting
+/// them here means the next reported tick still carries it.
+#[derive(Default)]
+struct PendingPulses {
+    ended: bool,
+    auto_advanced_to: Option<String>,
+    error: Option<PlaybackError>,
+}
+
+impl PendingPulses {
+    fn absorb(&mut self, tick: &PlaybackTick) {
+        self.ended |= tick.ended;
+        if tick.auto_advanced_to.is_some() {
+            self.auto_advanced_to = tick.auto_advanced_to.clone();
+        }
+        if tick.error.is_some() {
+            self.error = tick.error.clone();
+        }
+    }
+
+    /// Moves everything collected onto the tick about to be reported, leaving
+    /// the accumulator empty.
+    fn apply_to(&mut self, tick: &mut PlaybackTick) {
+        tick.ended = self.ended;
+        tick.auto_advanced_to = self.auto_advanced_to.take();
+        tick.error = self.error.take();
+        self.ended = false;
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,9 +86,11 @@ pub fn run() {
         commands::library::get_track_palette,
         commands::library::update_track_tags,
         commands::library::toggle_favorite,
+        commands::library::record_play,
         commands::lyrics::get_lyrics,
         commands::lyrics::get_lyrics_source_text,
         commands::lyrics::save_lyrics,
+        commands::lyrics::fetch_online_lyrics,
         commands::player::play_track,
         commands::player::toggle_play,
         commands::player::pause_playback,
@@ -50,6 +105,12 @@ pub fn run() {
         commands::player::set_equalizer_bands,
         commands::player::preview_track_tempo,
         commands::player::set_track_tempo,
+        commands::player::restore_track,
+        commands::session::get_session,
+        commands::session::set_session_queue,
+        commands::session::set_session_progress,
+        commands::session::save_session,
+        commands::window::get_window_controls_visible,
         commands::theme::get_theme,
         commands::theme::set_theme,
         commands::theme::get_default_theme,
@@ -75,6 +136,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .register_asynchronous_uri_scheme_protocol(
             data::cover_protocol::SCHEME,
             data::cover_protocol::handle,
@@ -99,6 +161,12 @@ pub fn run() {
             player.set_crossfade_seconds(playback_settings.crossfade_secs);
             player.set_equalizer_bands(playback_settings.eq_gains);
 
+            let session = SessionState::new(SessionStore::new(&app_config_dir));
+            // The frontend restores the rest of the session for itself, but the
+            // volume has to be in place before anything can be loaded onto a
+            // deck, or the first restored track starts at full blast.
+            player.set_volume(session.snapshot().volume)?;
+
             app.manage(AppState {
                 db,
                 player,
@@ -109,34 +177,99 @@ pub fn run() {
                 hotkeys_store,
                 hotkeys: Mutex::new(hotkeys),
                 playback_settings_store,
+                session,
+                mpris: Default::default(),
             });
 
             let mpris_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match mpris_server::Server::new("muzon", MprisPlayer::new(mpris_handle)).await {
+                match mpris_server::Server::new("muzon", MprisPlayer::new(mpris_handle.clone())).await
+                {
                     Ok(server) => {
-                        // The connection's message dispatch runs independently on the
-                        // tokio runtime once created; this just keeps `server` (and
-                        // thus the connection) alive for the app's lifetime.
-                        std::future::pending::<()>().await;
-                        drop(server);
+                        // Handing the server to the bridge is also what keeps it
+                        // (and its D-Bus connection) alive for the app's
+                        // lifetime; message dispatch runs on the tokio runtime
+                        // independently from here.
+                        mpris_handle
+                            .state::<AppState>()
+                            .mpris
+                            .attach(Arc::new(server));
                     }
                     Err(e) => eprintln!("Failed to start MPRIS server: {e}"),
                 }
             });
 
             let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(Duration::from_millis(200));
-                let state = handle.state::<AppState>();
-                let tick = state.player.tick();
-                let mut channel_guard = state.tick_channel.lock().unwrap();
-                if let Some(channel) = channel_guard.as_ref() {
-                    if channel.send(tick).is_err() {
-                        *channel_guard = None;
+            std::thread::spawn(move || {
+                // What the desktop shell has last been told. Ticks almost always
+                // say the same thing as the one before, so we announce only the
+                // transitions.
+                let mut announced: Option<(bool, Option<String>, bool)> = None;
+                let mut pending = PendingPulses::default();
+                let mut last_frontend_tick = Instant::now();
+                let mut last_session_flush = Instant::now();
+                let mut interval = POLL_INTERVAL;
+
+                loop {
+                    std::thread::sleep(interval);
+                    let state = handle.state::<AppState>();
+                    let mut tick = state.player.tick();
+                    pending.absorb(&tick);
+                    interval = if state.player.is_crossfading() {
+                        CROSSFADE_POLL_INTERVAL
+                    } else {
+                        POLL_INTERVAL
+                    };
+
+                    if last_frontend_tick.elapsed() < FRONTEND_TICK_INTERVAL {
+                        continue;
+                    }
+                    last_frontend_tick = Instant::now();
+                    pending.apply_to(&mut tick);
+
+                    let mut channel_guard = state.tick_channel.lock().unwrap();
+                    if let Some(channel) = channel_guard.as_ref() {
+                        if channel.send(tick.clone()).is_err() {
+                            *channel_guard = None;
+                        }
+                    }
+                    drop(channel_guard);
+
+                    // Duration is part of the signature because a track's length
+                    // isn't queryable for the first tick or two after it starts:
+                    // announcing metadata only on the track change would leave
+                    // the shell showing a zero-length song forever.
+                    let current = (
+                        tick.is_playing,
+                        tick.path.clone(),
+                        tick.duration_secs > 0.0,
+                    );
+                    if announced.as_ref() != Some(&current) {
+                        let metadata_changed = announced
+                            .as_ref()
+                            .map(|(_, path, had_duration)| {
+                                path != &current.1 || *had_duration != current.2
+                            })
+                            .unwrap_or(true);
+                        let mut properties = vec![Property::PlaybackStatus(
+                            mpris::playback_status_of(&state.player.status()),
+                        )];
+                        if metadata_changed {
+                            properties.push(Property::Metadata(mpris::build_metadata(&handle)));
+                        }
+                        state.mpris.notify(properties);
+                        announced = Some(current);
+                    }
+
+                    if last_session_flush.elapsed() >= SESSION_FLUSH_INTERVAL {
+                        last_session_flush = Instant::now();
+                        if let Err(e) = state.session.flush() {
+                            eprintln!("[muzon] failed to save session: {e}");
+                        }
                     }
                 }
             });
+
 
             Ok(())
         })

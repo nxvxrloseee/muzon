@@ -1,6 +1,6 @@
 [package]
 name = "muzon"
-version = "1.1.0"
+version = "1.2.0"
 description = "Muzon music player"
 authors = ["nxvxrloseee"]
 edition = "2021"
@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -37,6 +38,11 @@ rusqlite_migration = "1"
 
 lofty = "0.22"
 walkdir = "2"
+rayon = "1"
+# rustls rather than the system OpenSSL: nothing new to declare as a
+# dependency when packaging, and native-certs still honours the machine's own
+# trust store.
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "rustls-native-certs"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 mpris-server = { version = "0.10.0", features = ["tokio"] }
@@ -44,3 +50,7 @@ specta = { version = "2.0.0-rc.25", features = ["derive"] }
 tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
 specta-typescript = "0.0.12"
 
+[dev-dependencies]
+# The one test that talks to LRCLIB needs an async test harness; it is
+# `#[ignore]`d, so this is only ever pulled in for `cargo test`.
+tokio = { version = "1", features = ["macros", "rt"] }

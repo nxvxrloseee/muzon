@@ -1,8 +1,9 @@
 use crate::data::audio::pipeline::{PlaybackTick, EQ_BAND_COUNT};
 use crate::domain::playback_settings::PlaybackSettings;
 use crate::state::AppState;
+use mpris_server::Property;
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{Manager, State};
 
 #[tauri::command]
 #[specta::specta]
@@ -37,13 +38,52 @@ pub fn pause_playback(state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub fn seek(state: State<AppState>, position_secs: f64) -> Result<(), String> {
-    state.player.seek(position_secs).map_err(|e| e.to_string())
+    state.player.seek(position_secs).map_err(|e| e.to_string())?;
+    // A shell can't infer a jump from the position property alone - MPRIS has a
+    // dedicated signal for exactly this case.
+    state.mpris.seeked(position_secs);
+    Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn set_volume(state: State<AppState>, volume: f64) -> Result<(), String> {
-    state.player.set_volume(volume).map_err(|e| e.to_string())
+    state.player.set_volume(volume).map_err(|e| e.to_string())?;
+    state
+        .mpris
+        .notify(vec![Property::Volume(state.player.volume())]);
+    Ok(())
+}
+
+/// Loads `path` paused at `position_secs`. This is session restore: the app
+/// comes back with the track it was closed on sitting exactly where it was,
+/// without starting to play by itself.
+#[tauri::command]
+#[specta::specta]
+pub async fn restore_track(
+    app: tauri::AppHandle,
+    path: String,
+    position_secs: f64,
+) -> Result<(), String> {
+    // Pre-rolling blocks until the pipeline is ready to answer a seek, and on
+    // Linux/webkitgtk this command's IPC dispatch runs on the GTK main thread -
+    // same class of freeze already fixed for cover art and library scans.
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state
+            .player
+            .load_paused_at(&path, position_secs)
+            .map_err(|e| e.to_string())?;
+        let tempo = state
+            .db
+            .track_tempo_by_path(&path)
+            .map_err(|e| e.to_string())?
+            .unwrap_or(1.0);
+        state.player.apply_tempo_for_path(&path, tempo);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

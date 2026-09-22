@@ -50,7 +50,25 @@ export function LrcEditor({
   const [tapIndex, setTapIndex] = useState(0);
   const [tapStamped, setTapStamped] = useState<TapLine[]>([]);
   const [saving, setSaving] = useState(false);
+  const [fetching, setFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Loads into the editor rather than saving: a fetched match is a suggestion,
+  // and the point of being in the editor is to look at it first.
+  async function fetchFromLrclib() {
+    if (!track) return;
+    setFetching(true);
+    setError(null);
+    try {
+      const found = await lyricsApi.fetchOnlineLyrics(track.path);
+      if (found) setText(found);
+      else setError("В LRCLIB ничего подходящего не нашлось");
+    } catch (e) {
+      setError(`Не удалось загрузить текст: ${String(e)}`);
+    } finally {
+      setFetching(false);
+    }
+  }
 
   useEffect(() => {
     if (!open || !track) return;
@@ -144,6 +162,9 @@ export function LrcEditor({
             />
 
             <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" onClick={fetchFromLrclib} disabled={fetching}>
+                {fetching ? "Ищем…" : "Найти в LRCLIB"}
+              </Button>
               <Button size="sm" variant="outline" onClick={startTapMode} disabled={!text.trim()}>
                 Режим «нажимай в такт»
               </Button>
