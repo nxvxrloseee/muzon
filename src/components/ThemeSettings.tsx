@@ -9,9 +9,14 @@ function RoleSwatch({ roleKey, label }: { roleKey: keyof Theme; label: string })
   const [open, setOpen] = useState(false);
   const value = useThemeStore((s) => s.theme?.[roleKey] ?? "#000000");
   const setColor = useThemeStore((s) => s.setColor);
+  const fromSystem = useThemeStore((s) => s.source === "system");
 
   return (
-    <div className="relative flex items-center justify-between gap-3 rounded-md px-3 py-2 hover:bg-card-hover">
+    <div
+      className={`relative flex items-center justify-between gap-3 rounded-md px-3 py-2 hover:bg-card-hover ${
+        fromSystem ? "opacity-60" : ""
+      }`}
+    >
       <span className="text-sm text-text-secondary">{label}</span>
       <div className="flex items-center gap-2">
         <input
@@ -91,6 +96,58 @@ function HotkeyRow({ action }: { action: keyof Hotkeys }) {
   );
 }
 
+function SystemThemeToggle() {
+  const source = useThemeStore((s) => s.source);
+  const available = useThemeStore((s) => s.systemAvailable);
+  const setSource = useThemeStore((s) => s.setSource);
+  const [error, setError] = useState<string | null>(null);
+  const on = source === "system";
+
+  async function toggle() {
+    setError(null);
+    try {
+      await setSource(on ? "manual" : "system");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <div className="mb-4 rounded-md bg-card-background p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-text-primary">Цвета системы</div>
+          <div className="text-xs text-text-secondary">
+            {available
+              ? "Палитра берётся из темы рабочего стола и меняется вместе с обоями"
+              : "Палитра рабочего стола не найдена (caelestia или rice)"}
+          </div>
+        </div>
+        <button
+          onClick={toggle}
+          disabled={!available && !on}
+          aria-pressed={on}
+          className={`h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40 ${
+            on ? "bg-accent-primary" : "bg-divider"
+          }`}
+        >
+          <span
+            className={`block h-5 w-5 rounded-full bg-background transition-transform ${
+              on ? "translate-x-[22px]" : "translate-x-[2px]"
+            }`}
+          />
+        </button>
+      </div>
+      {on && (
+        <p className="mt-2 text-xs text-text-secondary">
+          Правка любого цвета ниже вернёт ручную палитру.
+        </p>
+      )}
+      {error && <p className="mt-2 text-xs text-accent-secondary">{error}</p>}
+    </div>
+  );
+}
+
 export function ThemeSettings() {
   const resetToDefault = useThemeStore((s) => s.resetToDefault);
   const exportToFile = useThemeStore((s) => s.exportToFile);
@@ -102,6 +159,8 @@ export function ThemeSettings() {
       <p className="mb-4 text-sm text-text-secondary">
         Изменения применяются мгновенно и сохраняются автоматически.
       </p>
+
+      <SystemThemeToggle />
 
       <div className="mb-4 flex flex-wrap gap-2">
         <button

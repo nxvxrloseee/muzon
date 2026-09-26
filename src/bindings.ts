@@ -110,6 +110,17 @@ export const commands = {
 	getWindowControlsVisible: () => __TAURI_INVOKE<boolean>("get_window_controls_visible"),
 	getTheme: () => __TAURI_INVOKE<Theme>("get_theme"),
 	setTheme: (theme: Theme) => __TAURI_INVOKE<null>("set_theme", { theme }),
+	getThemeSource: () => __TAURI_INVOKE<ThemeSource>("get_theme_source"),
+	/**
+	 *  Switch between the user's own palette and the desktop shell's. Switching to
+	 *  the system palette doesn't touch the manual one, so coming back restores it.
+	 */
+	setThemeSource: (source: ThemeSource) => __TAURI_INVOKE<Theme>("set_theme_source", { source }),
+	/**
+	 *  Whether there is a shell palette to follow at all - the setting is pointless
+	 *  without one.
+	 */
+	systemThemeAvailable: () => __TAURI_INVOKE<boolean>("system_theme_available"),
 	getDefaultTheme: (mode: string) => __TAURI_INVOKE<Theme>("get_default_theme", { mode }),
 	exportTheme: (path: string) => __TAURI_INVOKE<null>("export_theme", { path }),
 	importTheme: (path: string) => __TAURI_INVOKE<Theme>("import_theme", { path }),
@@ -259,6 +270,12 @@ export type Theme = {
 	karaokeActiveLine: string,
 	karaokeActiveWordHighlight: string,
 };
+
+/**
+ *  Where the window's colours come from: the palette the user picked by hand,
+ *  or the desktop shell's own scheme.
+ */
+export type ThemeSource = "manual" | "system";
 
 export type Track = {
 	id: number,

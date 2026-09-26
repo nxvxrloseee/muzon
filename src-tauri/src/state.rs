@@ -5,7 +5,7 @@ use crate::data::hotkeys_store::HotkeysStore;
 use crate::data::mpris::MprisBridge;
 use crate::data::playback_settings_store::PlaybackSettingsStore;
 use crate::data::session_store::SessionState;
-use crate::data::theme_store::ThemeStore;
+use crate::data::theme_store::{ThemeSource, ThemeStore};
 use crate::domain::{Hotkeys, Theme};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -17,6 +17,7 @@ pub struct AppState {
     pub tick_channel: Mutex<Option<Channel<PlaybackTick>>>,
     pub theme_store: ThemeStore,
     pub theme: Mutex<Theme>,
+    pub theme_source: Mutex<ThemeSource>,
     pub cover_cache: Mutex<HashMap<String, Option<String>>>,
     pub hotkeys_store: HotkeysStore,
     pub hotkeys: Mutex<Hotkeys>,

@@ -62,6 +62,48 @@ impl Theme {
         }
     }
 
+    /// Build a theme from a Material You scheme as desktop shells write it
+    /// (caelestia, rice, matugen): role name -> hex, with or without '#'.
+    /// Missing roles fall back to the built-in dark theme, so a partial or
+    /// unfamiliar scheme still gives a usable window.
+    pub fn from_material(colours: &std::collections::HashMap<String, String>) -> Self {
+        let base = Theme::default_dark();
+        let pick = |names: &[&str], fallback: &str| -> String {
+            for name in names {
+                if let Some(hex) = colours.get(*name) {
+                    let hex = hex.trim();
+                    let with_hash = if hex.starts_with('#') {
+                        hex.to_string()
+                    } else {
+                        format!("#{hex}")
+                    };
+                    if is_valid_hex_color(&with_hash) {
+                        return with_hash;
+                    }
+                }
+            }
+            fallback.to_string()
+        };
+
+        Self {
+            background: pick(&["surface", "background"], &base.background),
+            sidebar_background: pick(&["surfaceContainerLow", "surface"], &base.sidebar_background),
+            player_bar_background: pick(&["surfaceContainer", "surface"], &base.player_bar_background),
+            card_background: pick(&["surfaceContainerHigh", "surfaceContainer"], &base.card_background),
+            card_hover: pick(&["surfaceContainerHighest", "surfaceBright"], &base.card_hover),
+            accent_primary: pick(&["primary"], &base.accent_primary),
+            accent_secondary: pick(&["tertiary", "secondary"], &base.accent_secondary),
+            text_primary: pick(&["onSurface", "onBackground"], &base.text_primary),
+            text_secondary: pick(&["onSurfaceVariant", "outline"], &base.text_secondary),
+            divider: pick(&["outlineVariant", "outline"], &base.divider),
+            progress_track: pick(&["surfaceContainerHighest", "surfaceVariant"], &base.progress_track),
+            progress_fill: pick(&["primary"], &base.progress_fill),
+            karaoke_inactive_line: pick(&["outline", "onSurfaceVariant"], &base.karaoke_inactive_line),
+            karaoke_active_line: pick(&["onSurface"], &base.karaoke_active_line),
+            karaoke_active_word_highlight: pick(&["primary"], &base.karaoke_active_word_highlight),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         for (name, value) in self.as_pairs() {
             if !is_valid_hex_color(value) {
@@ -112,6 +154,42 @@ mod tests {
         let mut theme = Theme::default_dark();
         theme.accent_primary = "not-a-color".into();
         assert!(theme.validate().is_err());
+    }
+
+    #[test]
+    fn material_scheme_maps_to_roles() {
+        let colours: std::collections::HashMap<String, String> = [
+            ("surface", "0a0f0f"),
+            ("surfaceContainer", "141a1a"),
+            ("primary", "#9bd0cc"),
+            ("onSurface", "dce8e6"),
+            ("outlineVariant", "414847"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let theme = Theme::from_material(&colours);
+        assert_eq!(theme.background, "#0a0f0f");
+        assert_eq!(theme.player_bar_background, "#141a1a");
+        assert_eq!(theme.accent_primary, "#9bd0cc");
+        assert_eq!(theme.progress_fill, "#9bd0cc");
+        assert_eq!(theme.divider, "#414847");
+        assert!(theme.validate().is_ok());
+    }
+
+    #[test]
+    fn material_falls_back_for_missing_and_broken_roles() {
+        let dark = Theme::default_dark();
+        let colours: std::collections::HashMap<String, String> = [("primary", "nonsense")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        let theme = Theme::from_material(&colours);
+        assert_eq!(theme.accent_primary, dark.accent_primary);
+        assert_eq!(theme.background, dark.background);
+        assert!(theme.validate().is_ok());
     }
 
     #[test]

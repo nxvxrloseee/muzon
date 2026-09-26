@@ -13,6 +13,7 @@ export type {
   ScanReport,
   Session,
   Theme,
+  ThemeSource,
   Track,
   TrackPalette,
 } from "./bindings";

@@ -10,6 +10,7 @@ pub mod mpris;
 pub mod playback_settings_store;
 pub mod scanner;
 pub mod session_store;
+pub mod system_theme;
 pub mod tag_writer;
 pub mod tags;
 pub mod theme_store;

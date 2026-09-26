@@ -11,13 +11,13 @@ use data::hotkeys_store::HotkeysStore;
 use data::mpris::{self, MprisPlayer};
 use data::playback_settings_store::PlaybackSettingsStore;
 use data::session_store::{SessionState, SessionStore};
-use data::theme_store::ThemeStore;
+use data::theme_store::{ThemeSource, ThemeStore};
 use mpris_server::Property;
 use state::AppState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_specta::{collect_commands, Builder};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -118,6 +118,9 @@ pub fn run() {
         commands::window::get_window_controls_visible,
         commands::theme::get_theme,
         commands::theme::set_theme,
+        commands::theme::get_theme_source,
+        commands::theme::set_theme_source,
+        commands::theme::system_theme_available,
         commands::theme::get_default_theme,
         commands::theme::export_theme,
         commands::theme::import_theme,
@@ -158,7 +161,16 @@ pub fn run() {
             let app_config_dir = app.path().app_config_dir()?;
             std::fs::create_dir_all(&app_config_dir)?;
             let theme_store = ThemeStore::new(&app_config_dir);
-            let theme = theme_store.load_or_default();
+            let theme_source = theme_store.load_source();
+            // Following the shell's palette: if it can't be read (no shell, file
+            // gone) fall back to the saved colours rather than refusing to start
+            let theme = match theme_source {
+                ThemeSource::System => data::system_theme::load().unwrap_or_else(|e| {
+                    eprintln!("[muzon theme] палитра системы недоступна: {e}");
+                    theme_store.load_or_default()
+                }),
+                ThemeSource::Manual => theme_store.load_or_default(),
+            };
             let hotkeys_store = HotkeysStore::new(&app_config_dir);
             let hotkeys = hotkeys_store.load_or_default();
             let playback_settings_store = PlaybackSettingsStore::new(&app_config_dir);
@@ -178,6 +190,7 @@ pub fn run() {
                 tick_channel: Mutex::new(None),
                 theme_store,
                 theme: Mutex::new(theme),
+                theme_source: Mutex::new(theme_source),
                 cover_cache: Mutex::new(HashMap::new()),
                 hotkeys_store,
                 hotkeys: Mutex::new(hotkeys),
@@ -189,6 +202,27 @@ pub fn run() {
 
             // Queue, favourites and lyrics for desktop shells (see data/control.rs)
             data::control::serve(app.handle().clone());
+
+            // Recolouring the desktop recolours the window: watch the shell's
+            // palette while the user is following it
+            let theme_handle = app.handle().clone();
+            let stop_handle = app.handle().clone();
+            data::system_theme::watch(
+                move |theme| {
+                    let state = theme_handle.state::<AppState>();
+                    if *state.theme_source.lock().unwrap() != ThemeSource::System {
+                        return;
+                    }
+                    *state.theme.lock().unwrap() = theme.clone();
+                    let _ = theme_handle.emit("theme-changed", theme);
+                },
+                move || {
+                    let state = stop_handle.state::<AppState>();
+                    // Only stops when the user leaves the system palette
+                    let following = *state.theme_source.lock().unwrap() == ThemeSource::System;
+                    !following
+                },
+            );
 
             let mpris_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
