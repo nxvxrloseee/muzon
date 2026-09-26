@@ -118,6 +118,13 @@ pub fn run() {
         commands::window::get_window_controls_visible,
         commands::theme::get_theme,
         commands::theme::set_theme,
+        commands::sync::get_s3_config,
+        commands::sync::set_s3_config,
+        commands::sync::set_s3_credentials,
+        commands::sync::forget_s3_credentials,
+        commands::sync::has_s3_credentials,
+        commands::sync::check_s3_connection,
+        commands::sync::sync_now,
         commands::theme::get_theme_source,
         commands::theme::set_theme_source,
         commands::theme::system_theme_available,
@@ -178,6 +185,9 @@ pub fn run() {
             player.set_crossfade_seconds(playback_settings.crossfade_secs);
             player.set_equalizer_bands(playback_settings.eq_gains);
 
+            let s3_config_store = data::s3_config_store::S3ConfigStore::new(&app_config_dir);
+            let s3_config = s3_config_store.load_or_default();
+
             let session = SessionState::new(SessionStore::new(&app_config_dir));
             // The frontend restores the rest of the session for itself, but the
             // volume has to be in place before anything can be loaded onto a
@@ -195,6 +205,8 @@ pub fn run() {
                 hotkeys_store,
                 hotkeys: Mutex::new(hotkeys),
                 playback_settings_store,
+                s3_config_store,
+                s3_config: Mutex::new(s3_config),
                 session,
                 mpris: Default::default(),
                 control: Default::default(),

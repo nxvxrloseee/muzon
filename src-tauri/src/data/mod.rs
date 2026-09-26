@@ -8,6 +8,8 @@ pub mod lrc_source;
 pub mod lrclib;
 pub mod mpris;
 pub mod playback_settings_store;
+pub mod s3;
+pub mod s3_config_store;
 pub mod scanner;
 pub mod session_store;
 pub mod system_theme;

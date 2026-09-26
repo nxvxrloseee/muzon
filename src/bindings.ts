@@ -110,6 +110,16 @@ export const commands = {
 	getWindowControlsVisible: () => __TAURI_INVOKE<boolean>("get_window_controls_visible"),
 	getTheme: () => __TAURI_INVOKE<Theme>("get_theme"),
 	setTheme: (theme: Theme) => __TAURI_INVOKE<null>("set_theme", { theme }),
+	getS3Config: () => __TAURI_INVOKE<S3Config>("get_s3_config"),
+	setS3Config: (config: S3Config) => __TAURI_INVOKE<null>("set_s3_config", { config }),
+	/**  Keys go to the system keyring, never to a config file. */
+	setS3Credentials: (accessKey: string, secretKey: string) => __TAURI_INVOKE<null>("set_s3_credentials", { accessKey, secretKey }),
+	forgetS3Credentials: () => __TAURI_INVOKE<void>("forget_s3_credentials"),
+	hasS3Credentials: () => __TAURI_INVOKE<boolean>("has_s3_credentials"),
+	/**  One cheap request: proves the endpoint, the bucket and the keys work. */
+	checkS3Connection: () => __TAURI_INVOKE<null>("check_s3_connection"),
+	/**  Runs the whole sync. Progress arrives as `sync-progress` events. */
+	syncNow: () => __TAURI_INVOKE<SyncOutcome>("sync_now"),
 	getThemeSource: () => __TAURI_INVOKE<ThemeSource>("get_theme_source"),
 	/**
 	 *  Switch between the user's own palette and the desktop shell's. Switching to
@@ -220,6 +230,21 @@ export type Playlist = {
 
 export type RepeatMode = "off" | "all" | "one";
 
+/**
+ *  Where the library is mirrored. Keys are never stored here - they live in the
+ *  system keyring (see data/s3/creds.rs).
+ */
+export type S3Config = {
+	/**  Empty means AWS in the given region */
+	endpoint?: string,
+	region?: string,
+	bucket?: string,
+	/**  Everything Muzon writes lives under this prefix */
+	prefix?: string,
+	/**  MinIO and most self-hosted servers need path-style addressing */
+	pathStyle?: boolean,
+};
+
 export type ScanReport = {
 	added: number,
 	updated: number,
@@ -251,6 +276,16 @@ export type Session = {
 	repeat?: RepeatMode,
 	positionSecs?: number,
 	volume?: number,
+};
+
+export type SyncOutcome = {
+	uploaded: number,
+	downloaded: number,
+	upToDate: number,
+	bytesUp: number,
+	bytesDown: number,
+	/**  Files that failed, with the reason - the rest of the sync still runs */
+	failures: string[],
 };
 
 export type Theme = {

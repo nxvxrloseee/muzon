@@ -44,6 +44,11 @@ rayon = "1"
 # trust store.
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "rustls-native-certs"] }
 base64 = "0.22"
+# S3 через подпись SigV4 поверх reqwest: AWS SDK притащил бы десятки крейтов
+# ради четырёх запросов, а тут хватает хеша и HMAC
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 mpris-server = { version = "0.10.0", features = ["tokio"] }
 specta = { version = "2.0.0-rc.25", features = ["derive"] }
@@ -53,4 +58,4 @@ specta-typescript = "0.0.12"
 [dev-dependencies]
 # The one test that talks to LRCLIB needs an async test harness; it is
 # `#[ignore]`d, so this is only ever pulled in for `cargo test`.
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }

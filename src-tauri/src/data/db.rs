@@ -124,6 +124,45 @@ impl Db {
         Ok(())
     }
 
+    /// The library folders the user added, in the order they were added.
+    pub fn list_roots(&self) -> rusqlite::Result<Vec<std::path::PathBuf>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT path FROM roots ORDER BY id")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.map(|p| p.map(std::path::PathBuf::from)).collect()
+    }
+
+    /// Used by the S3 sync when applying a merged snapshot: a like made on
+    /// another machine is set, never cleared.
+    pub fn set_favorite_by_path(&self, path: &str, favorite: bool) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tracks SET is_favorite = ?2 WHERE path = ?1",
+            rusqlite::params![path, favorite as i32],
+        )?;
+        Ok(())
+    }
+
+    /// Raises the counter to `count` if the other machine listened more often.
+    pub fn raise_play_count_by_path(&self, path: &str, count: i32) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tracks SET play_count = MAX(play_count, ?2) WHERE path = ?1",
+            rusqlite::params![path, count],
+        )?;
+        Ok(())
+    }
+
+    pub fn playlist_id_by_name(&self, name: &str) -> rusqlite::Result<Option<i32>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id FROM playlists WHERE name = ?1 LIMIT 1",
+            [name],
+            |r| r.get(0),
+        )
+        .optional()
+    }
+
     /// Paths (and mtimes) of all tracks currently known under `root`, used by the
     /// scanner to diff against the filesystem for incremental updates.
     pub fn known_tracks_under(&self, root: &Path) -> rusqlite::Result<HashMap<String, i64>> {

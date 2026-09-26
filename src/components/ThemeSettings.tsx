@@ -1,5 +1,6 @@
 import { HexColorPicker } from "react-colorful";
 import { useState } from "react";
+import { CloudSettings } from "./CloudSettings";
 import { useHotkeysStore } from "../store/hotkeysStore";
 import { useThemeStore } from "../store/themeStore";
 import { THEME_ROLES } from "../theme/roles";
@@ -194,6 +195,8 @@ export function ThemeSettings() {
           <RoleSwatch key={role.key} roleKey={role.key} label={role.label} />
         ))}
       </div>
+
+      <CloudSettings />
 
       <h2 className="mb-1 text-lg font-semibold text-text-primary">Горячие клавиши</h2>
       <p className="mb-4 text-sm text-text-secondary">

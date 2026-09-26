@@ -15,6 +15,8 @@ depends=(
   'gst-plugins-bad'
   'gst-plugins-ugly'
   'gst-libav'
+  # secret-tool: ключи доступа к S3 хранятся в связке ключей системы
+  'libsecret'
 )
 makedepends=(
   'rust'
@@ -26,7 +28,7 @@ source=(
   "$pkgname-$pkgver.tar.gz::https://github.com/nxvxrloseee/muzon/archive/v$pkgver.tar.gz"
   "$pkgname.desktop"
 )
-sha256sums=('119745cf8497144d56837825d96e6dd2eb15c6fdbad96e2afa53cf947b98e087'
+sha256sums=('b4da97b9db68e12f3ed9d0ac3a461a12d084692b399a474817735b93a787725a'
             '1aa81d0d072346d9dd30516ec3e802d90da12a737cd55fc5bec2e2a24a2a3738')
 
 build() {

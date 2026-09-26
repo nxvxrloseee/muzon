@@ -4,5 +4,6 @@ pub mod lyrics;
 pub mod player;
 pub mod playlists;
 pub mod session;
+pub mod sync;
 pub mod theme;
 pub mod window;
