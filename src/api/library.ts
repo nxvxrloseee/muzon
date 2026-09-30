@@ -12,6 +12,9 @@ export interface TrackEdit {
 
 export const libraryApi = {
   addMusicFolder: () => commands.addMusicFolder(),
+  listMusicFolders: () => commands.listMusicFolders(),
+  removeMusicFolder: (path: string) => commands.removeMusicFolder(path),
+  rescanLibrary: () => commands.rescanLibrary(),
   getTracks: () => commands.getTracks(),
   getTrackCover: (path: string) => commands.getTrackCover(path),
   recordPlay: (trackId: number) => commands.recordPlay(trackId),

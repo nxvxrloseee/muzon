@@ -86,6 +86,9 @@ pub fn run() {
         )
         .commands(collect_commands![
         commands::library::add_music_folder,
+        commands::library::list_music_folders,
+        commands::library::remove_music_folder,
+        commands::library::rescan_library,
         commands::library::get_tracks,
         commands::library::get_track_cover,
         commands::library::get_track_palette,
@@ -214,12 +217,19 @@ pub fn run() {
                 s3_config_store,
                 s3_config: Mutex::new(s3_config),
                 session,
+                scan_lock: Mutex::new(()),
+                library_watcher: Default::default(),
                 appearance_store,
                 appearance: Mutex::new(appearance),
                 window_transparent: appearance.transparent_window,
                 mpris: Default::default(),
                 control: Default::default(),
             });
+
+            // Catch up with whatever changed in the music folders while the app
+            // was closed, then follow them live
+            let library_handle = app.handle().clone();
+            std::thread::spawn(move || data::library_watch::start(&library_handle));
 
             // Queue, favourites and lyrics for desktop shells (see data/control.rs)
             data::control::serve(app.handle().clone());

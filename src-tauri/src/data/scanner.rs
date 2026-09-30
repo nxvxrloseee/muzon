@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "opus", "wav", "m4a", "aac", "wv"];
 
-fn is_audio(path: &Path) -> bool {
+pub fn is_audio(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -40,6 +40,17 @@ enum Scanned {
 
 pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
     let known = db.known_tracks_under(root)?;
+
+    // A folder on a drive that isn't mounted is indistinguishable from one
+    // whose files were all deleted - except that deleting them would throw away
+    // their favourites, play counts and playlist places. Leave such a folder
+    // alone until it comes back.
+    if !root.is_dir() {
+        return Ok(ScanReport {
+            errors: vec![format!("{}: папка недоступна", root.display())],
+            ..ScanReport::default()
+        });
+    }
 
     // Walking the tree is cheap and inherently sequential, so it only gathers
     // the work. Reading tags is the expensive part - file I/O plus a parse per
@@ -111,11 +122,22 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
         }
     }
 
-    let removed: Vec<String> = known
-        .keys()
-        .filter(|p| !seen.contains(*p))
-        .cloned()
-        .collect();
+    // An empty mount point looks the same as an unmounted drive's folder: an
+    // existing directory with nothing in it. Losing every file at once is far
+    // more likely to be that than a deliberate purge.
+    let removed: Vec<String> = if seen.is_empty() && !known.is_empty() {
+        report.errors.push(format!(
+            "{}: в папке не осталось ни одного файла, библиотека не тронута",
+            root.display()
+        ));
+        Vec::new()
+    } else {
+        known
+            .keys()
+            .filter(|p| !seen.contains(*p))
+            .cloned()
+            .collect()
+    };
     report.removed = removed.len() as u32;
 
     db.apply_scan_results(&upserts, &removed)?;
@@ -245,6 +267,41 @@ mod tests {
         let paths: Vec<String> = db.list_tracks().unwrap().into_iter().map(|t| t.path).collect();
         assert_eq!(paths.len(), 1);
         assert!(paths[0].ends_with("a.wav"));
+    }
+
+    #[test]
+    fn a_folder_that_went_missing_keeps_its_tracks() {
+        let dir = scratch_dir("scan-unmounted");
+        let music = dir.join("drive");
+        write_tone(&music, "a.wav", 0.1);
+        let db = open_db(&dir);
+        scan(&db, &music).unwrap();
+
+        // What an unplugged drive looks like from here
+        std::fs::remove_dir_all(&music).unwrap();
+        let report = scan(&db, &music).unwrap();
+
+        assert_eq!(report.removed, 0);
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(db.list_tracks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_emptied_folder_is_treated_as_unavailable_not_purged() {
+        let dir = scratch_dir("scan-empty-mount");
+        let music = dir.join("mnt");
+        let a = write_tone(&music, "a.wav", 0.1);
+        let b = write_tone(&music, "b.wav", 0.1);
+        let db = open_db(&dir);
+        scan(&db, &music).unwrap();
+
+        // The mount point directory is still there, with nothing in it
+        std::fs::remove_file(a).unwrap();
+        std::fs::remove_file(b).unwrap();
+        let report = scan(&db, &music).unwrap();
+
+        assert_eq!(report.removed, 0);
+        assert_eq!(db.list_tracks().unwrap().len(), 2);
     }
 
     #[test]

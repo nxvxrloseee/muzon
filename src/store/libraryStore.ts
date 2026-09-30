@@ -1,14 +1,21 @@
+import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { toast } from "sonner";
 import { libraryApi, type TrackEdit } from "../api/library";
-import type { Track } from "../types";
+import type { ScanReport, Track } from "../types";
 
 interface LibraryState {
   tracks: Track[];
+  /** The library folders, in the order they were added. */
+  folders: string[];
   scanning: boolean;
   error: string | null;
   refreshTracks: () => Promise<void>;
+  loadFolders: () => Promise<void>;
   addFolder: () => Promise<void>;
+  /** Forgets the folder's tracks (the files stay). Resolves to how many. */
+  removeFolder: (path: string) => Promise<number>;
+  rescan: () => Promise<void>;
   updateTrackTags: (path: string, edit: TrackEdit) => Promise<void>;
   toggleFavorite: (trackId: number) => Promise<void>;
   /** A favourite already flipped elsewhere (the control socket): just show it. */
@@ -19,8 +26,34 @@ interface LibraryState {
   recordPlay: (trackId: number) => Promise<void>;
 }
 
+function reportScan(report: ScanReport, sayWhenNothingChanged = false) {
+  const changed = report.added + report.updated + report.removed > 0;
+  if (report.errors.length > 0) {
+    toast.warning(
+      `Добавлено ${report.added}, обновлено ${report.updated}, убрано ${report.removed}, ошибок: ${report.errors.length}`,
+      { description: report.errors.slice(0, 3).join("\n") },
+    );
+  } else if (changed) {
+    toast.success(
+      `Библиотека обновлена: +${report.added}, обновлено ${report.updated}, убрано ${report.removed}`,
+    );
+  } else if (sayWhenNothingChanged) {
+    toast.success("Изменений нет");
+  }
+}
+
+/** The backend rescanned something (at startup, on a file change, after a
+ * sync) and the library is different now. Returns the unsubscribe. */
+export function followLibraryChanges(): () => void {
+  const unlisten = listen<ScanReport>("library-changed", () => {
+    void useLibraryStore.getState().refreshTracks();
+  });
+  return () => void unlisten.then((stop) => stop());
+}
+
 export const useLibraryStore = create<LibraryState>((set, get) => ({
   tracks: [],
+  folders: [],
   scanning: false,
   error: null,
   refreshTracks: async () => {
@@ -31,21 +64,35 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       set({ error: String(e) });
     }
   },
+  loadFolders: async () => {
+    set({ folders: await libraryApi.listMusicFolders() });
+  },
   addFolder: async () => {
     set({ scanning: true, error: null });
     try {
+      // The tracks themselves arrive through `library-changed`
       const report = await libraryApi.addMusicFolder();
-      await get().refreshTracks();
-      if (report.errors.length > 0) {
-        toast.warning(
-          `Добавлено ${report.added}, обновлено ${report.updated}, ошибок: ${report.errors.length}`,
-        );
-      } else {
-        toast.success(`Библиотека обновлена: +${report.added}, обновлено ${report.updated}`);
-      }
+      await get().loadFolders();
+      reportScan(report);
     } catch (e) {
       set({ error: String(e) });
       toast.error(`Не удалось просканировать папку: ${String(e)}`);
+    } finally {
+      set({ scanning: false });
+    }
+  },
+  removeFolder: async (path) => {
+    const removed = await libraryApi.removeMusicFolder(path);
+    await get().loadFolders();
+    return removed;
+  },
+  rescan: async () => {
+    set({ scanning: true, error: null });
+    try {
+      const report = await libraryApi.rescanLibrary();
+      reportScan(report, true);
+    } catch (e) {
+      toast.error(`Не удалось пересканировать: ${String(e)}`);
     } finally {
       set({ scanning: false });
     }

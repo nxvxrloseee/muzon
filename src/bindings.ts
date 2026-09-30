@@ -5,6 +5,15 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	addMusicFolder: () => __TAURI_INVOKE<ScanReport>("add_music_folder"),
+	listMusicFolders: () => __TAURI_INVOKE<string[]>("list_music_folders"),
+	/**
+	 *  Stops following the folder and forgets its tracks - with their
+	 *  favourites, play counts and playlist places. The files stay on disk.
+	 *  Returns how many tracks left the library.
+	 */
+	removeMusicFolder: (path: string) => __TAURI_INVOKE<number>("remove_music_folder", { path }),
+	/**  Rescans every library folder now, rather than waiting for the watcher. */
+	rescanLibrary: () => __TAURI_INVOKE<ScanReport>("rescan_library"),
 	/**
 	 *  Off the UI thread for the same reason as the scan and the cover decode: on
 	 *  Linux/webkitgtk a synchronous command's IPC dispatch runs on the GTK main

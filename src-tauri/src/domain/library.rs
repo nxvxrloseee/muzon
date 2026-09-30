@@ -1,5 +1,5 @@
 use crate::data::db::{Db, NewTrack};
-use crate::data::{scanner, tag_writer, tags};
+use crate::data::{tag_writer, tags};
 use crate::domain::Track;
 use serde::Serialize;
 use specta::Type;
@@ -14,6 +14,19 @@ pub struct ScanReport {
     pub errors: Vec<String>,
 }
 
+impl ScanReport {
+    pub fn absorb(&mut self, other: ScanReport) {
+        self.added += other.added;
+        self.updated += other.updated;
+        self.removed += other.removed;
+        self.errors.extend(other.errors);
+    }
+
+    pub fn changed_anything(&self) -> bool {
+        self.added + self.updated + self.removed > 0
+    }
+}
+
 pub struct TrackEditInput {
     pub title: String,
     pub artist: Option<String>,
@@ -24,11 +37,6 @@ pub struct TrackEditInput {
     /// Path to an image file to embed as the new cover; `None` leaves any
     /// existing embedded cover untouched.
     pub cover_path: Option<String>,
-}
-
-pub fn add_root_and_scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
-    db.add_root(root)?;
-    scanner::scan(db, root)
 }
 
 pub fn list_tracks(db: &Db) -> anyhow::Result<Vec<Track>> {

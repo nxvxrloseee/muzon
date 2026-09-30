@@ -5,6 +5,7 @@ pub mod cover_protocol;
 pub mod covers;
 pub mod db;
 pub mod hotkeys_store;
+pub mod library_watch;
 pub mod lrc_source;
 pub mod lrclib;
 pub mod mpris;

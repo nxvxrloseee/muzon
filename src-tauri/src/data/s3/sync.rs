@@ -421,10 +421,7 @@ pub async fn run(app: AppHandle, cfg: S3Config) -> anyhow::Result<SyncOutcome> {
     // New files have to reach the library before the snapshot can point at them
     if downloaded_any {
         progress(&app, "library", done, total, "");
-        let state = app.state::<AppState>();
-        for root in &roots {
-            let _ = crate::data::scanner::scan(&state.db, root);
-        }
+        crate::data::library_watch::rescan(&app, &roots);
     }
 
     progress(&app, "library", done, total, LIBRARY_FILE);

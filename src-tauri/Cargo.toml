@@ -38,6 +38,9 @@ rusqlite_migration = "1"
 
 lofty = "0.22"
 walkdir = "2"
+# inotify on Linux: the library follows files added, changed or deleted in its
+# folders while the app runs
+notify = { version = "8", default-features = false }
 rayon = "1"
 # rustls rather than the system OpenSSL: nothing new to declare as a
 # dependency when packaging, and native-certs still honours the machine's own

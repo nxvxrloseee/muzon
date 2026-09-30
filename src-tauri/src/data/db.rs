@@ -206,9 +206,12 @@ impl Db {
 
     /// Paths (and mtimes) of all tracks currently known under `root`, used by the
     /// scanner to diff against the filesystem for incremental updates.
+    ///
+    /// Matched by path component, not by string prefix: as a string, `/music`
+    /// is a prefix of `/music2/a.mp3`, and a scan of `/music` would then take
+    /// every track of `/music2` for deleted.
     pub fn known_tracks_under(&self, root: &Path) -> rusqlite::Result<HashMap<String, i64>> {
         let conn = self.conn.lock().unwrap();
-        let prefix = root.to_string_lossy().to_string();
         let mut stmt = conn.prepare("SELECT path, mtime FROM tracks")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -216,11 +219,32 @@ impl Db {
         let mut map = HashMap::new();
         for r in rows {
             let (path, mtime) = r?;
-            if path.starts_with(&prefix) {
+            if Path::new(&path).starts_with(root) {
                 map.insert(path, mtime);
             }
         }
         Ok(map)
+    }
+
+    /// Forgets a library folder and every track under it (their playlist
+    /// entries go with them by cascade). The files themselves are untouched.
+    /// Returns how many tracks were dropped.
+    pub fn remove_root(&self, root: &Path) -> rusqlite::Result<u32> {
+        let paths: Vec<String> = self.known_tracks_under(root)?.into_keys().collect();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM roots WHERE path = ?1",
+            [root.to_string_lossy().to_string()],
+        )?;
+        {
+            let mut stmt = tx.prepare("DELETE FROM tracks WHERE path = ?1")?;
+            for path in &paths {
+                stmt.execute([path])?;
+            }
+        }
+        tx.commit()?;
+        Ok(paths.len() as u32)
     }
 
     pub fn upsert_track(&self, t: &NewTrack) -> rusqlite::Result<()> {
@@ -682,6 +706,35 @@ mod tests {
         let known = db.known_tracks_under(Path::new("/music")).unwrap();
         assert_eq!(known.len(), 1);
         assert!(known.contains_key("/music/a.mp3"));
+    }
+
+    #[test]
+    fn a_folder_does_not_claim_a_sibling_that_merely_shares_its_name() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_track(&sample("/music/a.mp3", "A", "Artist", "Album", 1))
+            .unwrap();
+        db.upsert_track(&sample("/music2/b.mp3", "B", "Artist", "Album", 2))
+            .unwrap();
+
+        let known = db.known_tracks_under(Path::new("/music")).unwrap();
+        assert_eq!(known.keys().collect::<Vec<_>>(), ["/music/a.mp3"]);
+    }
+
+    #[test]
+    fn removing_a_root_drops_its_tracks_and_nothing_else() {
+        let db = Db::open_in_memory().unwrap();
+        db.add_root(Path::new("/music")).unwrap();
+        db.add_root(Path::new("/music2")).unwrap();
+        db.upsert_track(&sample("/music/a.mp3", "A", "Artist", "Album", 1))
+            .unwrap();
+        db.upsert_track(&sample("/music2/b.mp3", "B", "Artist", "Album", 2))
+            .unwrap();
+
+        assert_eq!(db.remove_root(Path::new("/music")).unwrap(), 1);
+
+        assert_eq!(db.list_roots().unwrap(), [Path::new("/music2")]);
+        let left: Vec<_> = db.list_tracks().unwrap().into_iter().map(|t| t.path).collect();
+        assert_eq!(left, ["/music2/b.mp3"]);
     }
 
     #[test]

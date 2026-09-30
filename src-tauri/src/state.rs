@@ -3,6 +3,7 @@ use crate::data::audio::pipeline::{AudioPlayer, PlaybackTick};
 use crate::data::control::ControlHub;
 use crate::data::db::Db;
 use crate::data::hotkeys_store::HotkeysStore;
+use crate::data::library_watch::LibraryWatcher;
 use crate::data::mpris::MprisBridge;
 use crate::data::playback_settings_store::PlaybackSettingsStore;
 use crate::data::s3_config_store::S3ConfigStore;
@@ -27,6 +28,9 @@ pub struct AppState {
     pub s3_config_store: S3ConfigStore,
     pub s3_config: Mutex<S3Config>,
     pub session: SessionState,
+    /// Held for the length of every library scan, see `data::library_watch`.
+    pub scan_lock: Mutex<()>,
+    pub library_watcher: LibraryWatcher,
     pub appearance_store: AppearanceStore,
     pub appearance: Mutex<Appearance>,
     /// What the window was actually created with - `appearance` may already

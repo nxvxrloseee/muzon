@@ -18,7 +18,7 @@ import { useMprisEvents } from "./hooks/useMprisEvents";
 import { useWindowControls } from "./hooks/useWindowControls";
 import { useAppearanceStore } from "./store/appearanceStore";
 import { useHotkeysStore } from "./store/hotkeysStore";
-import { useLibraryStore } from "./store/libraryStore";
+import { followLibraryChanges, useLibraryStore } from "./store/libraryStore";
 import { usePlayerStore } from "./store/playerStore";
 import { restoreSession, startSessionSync } from "./store/sessionStore";
 import { useThemeStore } from "./store/themeStore";
@@ -48,6 +48,10 @@ function App() {
 
     // The saved session holds track *paths*, so it can only be turned back into
     // a queue once the library those paths refer to is in memory.
+    // Before the first load: the backend's startup rescan may finish at any
+    // moment from here on, and its result must not slip between the two
+    const stopFollowingLibrary = followLibraryChanges();
+
     let cancelled = false;
     let stopSessionSync: (() => void) | undefined;
     void (async () => {
@@ -60,6 +64,7 @@ function App() {
     return () => {
       cancelled = true;
       stopSessionSync?.();
+      stopFollowingLibrary();
     };
   }, [refreshTracks, ensureSubscribed, initTheme, initHotkeys, initAppearance]);
 

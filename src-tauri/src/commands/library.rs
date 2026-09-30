@@ -1,7 +1,7 @@
-use crate::data::covers;
+use crate::data::{covers, library_watch};
 use crate::domain::{library, palette, Track, TrackPalette};
 use crate::state::AppState;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
@@ -28,7 +28,58 @@ pub async fn add_music_folder(app: tauri::AppHandle) -> Result<library::ScanRepo
     let app_handle = app.clone();
     tokio::task::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        library::add_root_and_scan(&state.db, &path_buf).map_err(|e| e.to_string())
+        state.db.add_root(&path_buf).map_err(|e| e.to_string())?;
+        state.library_watcher.watch(&path_buf);
+        Ok(library_watch::rescan(&app_handle, &[path_buf]))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn list_music_folders(state: State<AppState>) -> Result<Vec<String>, String> {
+    let roots = state.db.list_roots().map_err(|e| e.to_string())?;
+    Ok(roots
+        .into_iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect())
+}
+
+/// Stops following the folder and forgets its tracks - with their
+/// favourites, play counts and playlist places. The files stay on disk.
+/// Returns how many tracks left the library.
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_music_folder(app: tauri::AppHandle, path: String) -> Result<u32, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let root = std::path::PathBuf::from(&path);
+        state.library_watcher.unwatch(&root);
+        let _serial = state.scan_lock.lock().unwrap();
+        let removed = state.db.remove_root(&root).map_err(|e| e.to_string())?;
+        let report = library::ScanReport {
+            removed,
+            ..Default::default()
+        };
+        let _ = app.emit(library_watch::LIBRARY_CHANGED, report);
+        Ok(removed)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Rescans every library folder now, rather than waiting for the watcher.
+#[tauri::command]
+#[specta::specta]
+pub async fn rescan_library(app: tauri::AppHandle) -> Result<library::ScanReport, String> {
+    tokio::task::spawn_blocking(move || {
+        let roots = app
+            .state::<AppState>()
+            .db
+            .list_roots()
+            .map_err(|e| e.to_string())?;
+        Ok(library_watch::rescan(&app, &roots))
     })
     .await
     .map_err(|e| e.to_string())?
