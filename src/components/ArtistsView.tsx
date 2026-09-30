@@ -6,6 +6,7 @@ import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
 import { useStableGroups } from "../hooks/useStableGroups";
+import { tracksLabel } from "../lib/plural";
 import { TrackCover } from "./TrackCover";
 import { VirtualizedList } from "./VirtualizedList";
 
@@ -76,7 +77,7 @@ const ArtistRow = memo(function ArtistRow({
       />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm text-text-primary">{group.artist}</div>
-        <div className="truncate text-xs text-text-secondary">{group.tracks.length} треков</div>
+        <div className="truncate text-xs text-text-secondary">{tracksLabel(group.tracks.length)}</div>
       </div>
       <ChevronRight size={16} className="text-text-secondary" />
     </button>

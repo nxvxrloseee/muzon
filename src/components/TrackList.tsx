@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useLibrarySort } from "../hooks/useLibrarySort";
 import { useLibraryViewMode } from "../hooks/useLibraryViewMode";
+import { tracksLabel } from "../lib/plural";
 import { filterTracks } from "../lib/trackSearch";
 import { LIBRARY_SORT_LABELS, sortTracks, type LibrarySort } from "../lib/trackSort";
 import { useLibraryStore } from "../store/libraryStore";
@@ -414,7 +415,7 @@ export function TrackList() {
     <div className="relative flex h-full flex-col">
       <div className="flex items-center justify-between px-4 pt-3">
         <span className="text-xs text-text-secondary">
-          {tracks.length} {tracks.length === 1 ? "трек" : "треков"}
+          {tracksLabel(tracks.length)}
         </span>
         <div className="flex items-center gap-2">
         <DropdownMenu>
