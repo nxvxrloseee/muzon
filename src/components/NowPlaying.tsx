@@ -191,7 +191,7 @@ export function NowPlaying() {
   const artist = track?.artist ?? "";
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-background">
+    <div className="relative flex h-full flex-col overflow-hidden bg-surface-window">
       {/* A 110px blur across a full-screen layer makes WebKit allocate (and
           re-blur) a full-screen offscreen buffer. Blurring a layer rendered at
           1/5 scale and then scaling it up looks the same - the gradient's stops

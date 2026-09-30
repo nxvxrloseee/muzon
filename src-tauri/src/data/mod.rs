@@ -1,3 +1,4 @@
+pub mod appearance_store;
 pub mod audio;
 pub mod control;
 pub mod cover_protocol;

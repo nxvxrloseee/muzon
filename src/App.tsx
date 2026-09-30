@@ -15,6 +15,7 @@ import { useHotkeys } from "./hooks/useHotkeys";
 import { useLenis } from "./hooks/useLenis";
 import { useMprisEvents } from "./hooks/useMprisEvents";
 import { useWindowControls } from "./hooks/useWindowControls";
+import { useAppearanceStore } from "./store/appearanceStore";
 import { useHotkeysStore } from "./store/hotkeysStore";
 import { useLibraryStore } from "./store/libraryStore";
 import { usePlayerStore } from "./store/playerStore";
@@ -27,6 +28,7 @@ function App() {
   const ensureSubscribed = usePlayerStore((s) => s.ensureSubscribed);
   const initTheme = useThemeStore((s) => s.init);
   const initHotkeys = useHotkeysStore((s) => s.init);
+  const initAppearance = useAppearanceStore((s) => s.init);
   const view = useUiStore((s) => s.view);
   const showWindowControls = useWindowControls();
   const mainRef = useRef<HTMLElement>(null);
@@ -41,6 +43,7 @@ function App() {
     ensureSubscribed();
     initTheme();
     initHotkeys();
+    initAppearance();
 
     // The saved session holds track *paths*, so it can only be turned back into
     // a queue once the library those paths refer to is in memory.
@@ -57,11 +60,11 @@ function App() {
       cancelled = true;
       stopSessionSync?.();
     };
-  }, [refreshTracks, ensureSubscribed, initTheme, initHotkeys]);
+  }, [refreshTracks, ensureSubscribed, initTheme, initHotkeys, initAppearance]);
 
   if (view === "now-playing") {
     return (
-      <div className="relative h-screen w-screen overflow-hidden bg-background text-text-primary">
+      <div className="relative h-screen w-screen overflow-hidden text-text-primary">
         <NowPlaying />
         {/* Overlaid instead of given a bar of its own: the full-bleed gradient
             is the whole point of this view, and it sits on the right so it
@@ -72,13 +75,13 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-text-primary">
+    <div className="flex h-screen w-screen flex-col overflow-hidden text-text-primary">
       {showWindowControls && (
-        <WindowControls className="h-9 flex-shrink-0 justify-end border-b border-divider px-2" />
+        <WindowControls className="h-9 flex-shrink-0 justify-end border-b border-divider bg-surface-window px-2" />
       )}
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
-        <main ref={mainRef} className="flex-1 overflow-y-auto">
+        <main ref={mainRef} className="flex-1 overflow-y-auto bg-surface-window">
           <div ref={mainContentRef} className="h-full">
             {view === "settings" && <ThemeSettings />}
             {view === "playlists" && <PlaylistsView />}

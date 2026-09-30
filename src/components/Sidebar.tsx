@@ -34,7 +34,7 @@ export function Sidebar() {
   const openPalette = useCommandPaletteStore((s) => s.setOpen);
 
   return (
-    <aside className="flex h-full w-60 flex-col gap-4 border-r border-divider bg-sidebar-background p-4">
+    <aside className="flex h-full w-60 flex-col gap-4 border-r border-divider bg-surface-sidebar p-4">
       <div className="flex items-center gap-2 px-2 text-lg font-semibold text-text-primary">
         <Library size={20} />
         Muzon

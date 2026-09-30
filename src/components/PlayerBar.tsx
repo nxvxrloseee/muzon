@@ -25,7 +25,7 @@ export function PlayerBar() {
   const artist = track?.artist ?? "";
 
   return (
-    <div className="flex h-20 items-center gap-4 border-t border-divider bg-player-bar-background px-4">
+    <div className="flex h-20 items-center gap-4 border-t border-divider bg-surface-player-bar px-4">
       <button
         onClick={() => currentPath && setView("now-playing")}
         disabled={!currentPath}

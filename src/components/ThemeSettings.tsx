@@ -1,6 +1,7 @@
 import { HexColorPicker } from "react-colorful";
 import { useState } from "react";
 import { CloudSettings } from "./CloudSettings";
+import { useAppearanceStore } from "../store/appearanceStore";
 import { useHotkeysStore } from "../store/hotkeysStore";
 import { useThemeStore } from "../store/themeStore";
 import { THEME_ROLES } from "../theme/roles";
@@ -149,6 +150,68 @@ function SystemThemeToggle() {
   );
 }
 
+/** Mirrors `MIN_BACKGROUND_OPACITY` in `domain/appearance.rs`. */
+const MIN_BACKGROUND_OPACITY = 0.3;
+
+function WindowTransparency() {
+  const appearance = useAppearanceStore((s) => s.appearance);
+  const windowTransparent = useAppearanceStore((s) => s.windowTransparent);
+  const setTransparentWindow = useAppearanceStore((s) => s.setTransparentWindow);
+  const setBackgroundOpacity = useAppearanceStore((s) => s.setBackgroundOpacity);
+  if (!appearance) return null;
+
+  const on = appearance.transparentWindow;
+  const needsRestart = on !== windowTransparent;
+
+  return (
+    <div className="mb-4 rounded-md bg-card-background p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-text-primary">Прозрачное окно</div>
+          <div className="text-xs text-text-secondary">
+            Сквозь фон видно рабочий стол. Выключенная прозрачность экономит работу композитора.
+          </div>
+        </div>
+        <button
+          onClick={() => setTransparentWindow(!on)}
+          aria-pressed={on}
+          className={`h-6 w-11 shrink-0 rounded-full transition-colors ${
+            on ? "bg-accent-primary" : "bg-divider"
+          }`}
+        >
+          <span
+            className={`block h-5 w-5 rounded-full bg-background transition-transform ${
+              on ? "translate-x-[22px]" : "translate-x-[2px]"
+            }`}
+          />
+        </button>
+      </div>
+      {needsRestart && (
+        <p className="mt-2 text-xs text-accent-secondary">
+          Применится после перезапуска Muzon.
+        </p>
+      )}
+      {windowTransparent && (
+        <label className="mt-3 flex items-center gap-3">
+          <span className="shrink-0 text-xs text-text-secondary">Непрозрачность фона</span>
+          <input
+            type="range"
+            min={MIN_BACKGROUND_OPACITY}
+            max={1}
+            step={0.01}
+            value={appearance.backgroundOpacity}
+            onChange={(e) => setBackgroundOpacity(Number(e.target.value))}
+            className="flex-1"
+          />
+          <span className="w-10 shrink-0 text-right text-xs tabular-nums text-text-primary">
+            {Math.round(appearance.backgroundOpacity * 100)}%
+          </span>
+        </label>
+      )}
+    </div>
+  );
+}
+
 export function ThemeSettings() {
   const resetToDefault = useThemeStore((s) => s.resetToDefault);
   const exportToFile = useThemeStore((s) => s.exportToFile);
@@ -162,6 +225,7 @@ export function ThemeSettings() {
       </p>
 
       <SystemThemeToggle />
+      <WindowTransparency />
 
       <div className="mb-4 flex flex-wrap gap-2">
         <button

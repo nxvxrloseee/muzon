@@ -116,6 +116,9 @@ pub fn run() {
         commands::session::set_session_progress,
         commands::session::save_session,
         commands::window::get_window_controls_visible,
+        commands::window::get_appearance,
+        commands::window::set_appearance,
+        commands::window::window_is_transparent,
         commands::theme::get_theme,
         commands::theme::set_theme,
         commands::sync::get_s3_config,
@@ -188,6 +191,9 @@ pub fn run() {
             let s3_config_store = data::s3_config_store::S3ConfigStore::new(&app_config_dir);
             let s3_config = s3_config_store.load_or_default();
 
+            let appearance_store = data::appearance_store::AppearanceStore::new(&app_config_dir);
+            let appearance = appearance_store.load_or_default();
+
             let session = SessionState::new(SessionStore::new(&app_config_dir));
             // The frontend restores the rest of the session for itself, but the
             // volume has to be in place before anything can be loaded onto a
@@ -208,6 +214,9 @@ pub fn run() {
                 s3_config_store,
                 s3_config: Mutex::new(s3_config),
                 session,
+                appearance_store,
+                appearance: Mutex::new(appearance),
+                window_transparent: appearance.transparent_window,
                 mpris: Default::default(),
                 control: Default::default(),
             });
@@ -235,6 +244,21 @@ pub fn run() {
                     !following
                 },
             );
+
+            // The window is `create: false` in tauri.conf.json and built here,
+            // because whether it has an alpha channel is a user setting and
+            // WebKitGTK only takes it at creation. Built after `manage` so the
+            // page's first commands find the state in place.
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .cloned()
+                .ok_or("tauri.conf.json declares no window")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+                .transparent(appearance.transparent_window)
+                .build()?;
 
             let mpris_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

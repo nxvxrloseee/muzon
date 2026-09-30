@@ -1,3 +1,4 @@
+pub mod appearance;
 pub mod hotkeys;
 pub mod library;
 pub mod lyrics;
@@ -10,6 +11,7 @@ pub mod theme;
 pub mod track;
 pub mod window_chrome;
 
+pub use appearance::Appearance;
 pub use hotkeys::Hotkeys;
 pub use palette::TrackPalette;
 pub use s3::S3Config;

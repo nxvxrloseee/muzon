@@ -64,6 +64,13 @@
   --color-sidebar-border: var(--color-divider);
   --color-sidebar-ring: var(--color-accent-primary);
 
+  /* The window's own surfaces - and only those - follow the background opacity
+     setting. They tile the window without overlapping, so the setting is the
+     opacity you actually get; popovers keep the plain roles and stay solid. */
+  --color-surface-window: color-mix(in srgb, var(--color-background) var(--window-opacity), transparent);
+  --color-surface-sidebar: color-mix(in srgb, var(--color-sidebar-background) var(--window-opacity), transparent);
+  --color-surface-player-bar: color-mix(in srgb, var(--color-player-bar-background) var(--window-opacity), transparent);
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -77,10 +84,22 @@ body,
   height: 100%;
 }
 
+:root {
+  /* Set from the appearance store; stays 100% unless the window was created
+     with an alpha channel, where anything less would just darken it. */
+  --window-opacity: 100%;
+}
+
 body {
   margin: 0;
   background-color: var(--color-background);
   color: var(--color-text-primary);
+}
+
+/* The surfaces paint the window themselves; a body background under them
+   would add a second layer and make them more opaque than asked for. */
+html[data-window-transparent] body {
+  background-color: transparent;
 }
 
 @layer base {

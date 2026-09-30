@@ -108,6 +108,17 @@ export const commands = {
 	 *  session the app was launched into. See `domain::window_chrome`.
 	 */
 	getWindowControlsVisible: () => __TAURI_INVOKE<boolean>("get_window_controls_visible"),
+	getAppearance: () => __TAURI_INVOKE<Appearance>("get_appearance"),
+	/**
+	 *  Saves the settings and returns them as stored (opacity clamped). Opacity is
+	 *  applied by the frontend straight away; transparency only on the next launch.
+	 */
+	setAppearance: (appearance: Appearance) => __TAURI_INVOKE<Appearance>("set_appearance", { appearance }),
+	/**
+	 *  Whether this window has an alpha channel, i.e. whether background opacity
+	 *  can do anything right now.
+	 */
+	windowIsTransparent: () => __TAURI_INVOKE<boolean>("window_is_transparent"),
 	getTheme: () => __TAURI_INVOKE<Theme>("get_theme"),
 	setTheme: (theme: Theme) => __TAURI_INVOKE<null>("set_theme", { theme }),
 	getS3Config: () => __TAURI_INVOKE<S3Config>("get_s3_config"),
@@ -147,6 +158,20 @@ export const commands = {
 };
 
 /* Types */
+export type Appearance = {
+	/**
+	 *  Whether the window is created with an alpha channel. WebKitGTK can only
+	 *  be given one when the window is created, so a change takes effect on the
+	 *  next launch. Off by default: an opaque window is cheaper to composite.
+	 */
+	transparentWindow: boolean,
+	/**
+	 *  How opaque the window's backgrounds are while it is transparent, from
+	 *  `MIN_BACKGROUND_OPACITY` to 1.
+	 */
+	backgroundOpacity: number,
+};
+
 export type Hotkeys = {
 	playPause: string,
 	seekForward: string,
