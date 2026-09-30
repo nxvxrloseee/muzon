@@ -1,6 +1,6 @@
 # Maintainer: nxvxrloseee
 pkgname=muzon
-pkgver=1.5.0
+pkgver=1.6.0
 pkgrel=1
 pkgdesc="Local music player built with Tauri and GStreamer"
 arch=('x86_64')
@@ -28,7 +28,7 @@ source=(
   "$pkgname-$pkgver.tar.gz::https://github.com/nxvxrloseee/muzon/archive/v$pkgver.tar.gz"
   "$pkgname.desktop"
 )
-sha256sums=('b4da97b9db68e12f3ed9d0ac3a461a12d084692b399a474817735b93a787725a'
+sha256sums=('2edfad5fea93cb7f4f7e2f5b4117c17c387ace0a5db0b62504288ae23615a70f'
             '1aa81d0d072346d9dd30516ec3e802d90da12a737cd55fc5bec2e2a24a2a3738')
 
 build() {
