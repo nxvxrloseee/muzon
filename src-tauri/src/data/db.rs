@@ -301,6 +301,16 @@ impl Db {
         .optional()
     }
 
+    pub fn track_by_id(&self, id: i32) -> rusqlite::Result<Option<Track>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            &format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?1"),
+            [id],
+            row_to_track,
+        )
+        .optional()
+    }
+
     /// Counts one listen. Deliberately not part of any upsert: like favourites
     /// and tempo, this is history the scanner must never touch.
     pub fn record_play(&self, track_id: i32) -> rusqlite::Result<()> {

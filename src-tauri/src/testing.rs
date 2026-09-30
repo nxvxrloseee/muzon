@@ -42,3 +42,78 @@ pub fn scratch_dir(name: &str) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
+
+/// One request as the fake server saw it.
+#[derive(Debug)]
+pub struct SeenRequest {
+    pub method: String,
+    /// Path and query string, e.g. `/2.0/?method=auth.getToken&...`
+    pub target: String,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+impl SeenRequest {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// A one-connection-per-response HTTP server on localhost: answers the
+/// requests it receives with `responses` in order, `(status, body)`, and
+/// hands each request back for inspection. Enough to test an API client
+/// without the real service.
+pub fn fake_http_server(
+    responses: Vec<(u16, String)>,
+) -> (String, std::sync::mpsc::Receiver<SeenRequest>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for (status, body) in responses {
+            let Ok((stream, _)) = listener.accept() else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut parts = request_line.split_whitespace();
+            let method = parts.next().unwrap_or("").to_string();
+            let target = parts.next().unwrap_or("").to_string();
+            let mut headers = Vec::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let line = line.trim_end();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some((k, v)) = line.split_once(':') {
+                    headers.push((k.trim().to_string(), v.trim().to_string()));
+                }
+            }
+            let length = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, v)| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut body_bytes = vec![0; length];
+            reader.read_exact(&mut body_bytes).unwrap();
+            let _ = tx.send(SeenRequest {
+                method,
+                target,
+                headers,
+                body: String::from_utf8_lossy(&body_bytes).to_string(),
+            });
+            let mut stream = stream;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (url, rx)
+}

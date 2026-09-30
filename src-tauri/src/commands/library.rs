@@ -158,7 +158,23 @@ pub fn toggle_favorite(app: tauri::AppHandle, state: State<AppState>, track_id: 
 #[tauri::command]
 #[specta::specta]
 pub fn record_play(state: State<AppState>, track_id: i32) -> Result<(), String> {
-    state.db.record_play(track_id).map_err(|e| e.to_string())
+    state.db.record_play(track_id).map_err(|e| e.to_string())?;
+
+    // Both scrobblers want the moment the listen *began*: now, less however
+    // much of it has played - in wall-clock time, so divided by the tempo.
+    if let Ok(Some(track)) = state.db.track_by_id(track_id) {
+        let played = state.player.status().position_secs / state.player.current_tempo().max(0.01);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        if let Some(listen) =
+            crate::domain::scrobble::Listen::from_track(&track, (now - played).round() as i64)
+        {
+            state.scrobbler.listen(listen);
+        }
+    }
+    Ok(())
 }
 
 /// Rewrites the file's tags, which is blocking file I/O - and so has no

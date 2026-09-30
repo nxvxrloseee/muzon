@@ -15,6 +15,8 @@ export type {
   ReplayGainSettings,
   S3Config,
   ScanReport,
+  ScrobbleStatus,
+  ServiceStatus,
   Session,
   SyncOutcome,
   Theme,

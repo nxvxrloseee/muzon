@@ -4,6 +4,7 @@ pub mod library;
 pub mod lyrics;
 pub mod palette;
 pub mod playback_settings;
+pub mod scrobble;
 pub mod playlist;
 pub mod s3;
 pub mod session;

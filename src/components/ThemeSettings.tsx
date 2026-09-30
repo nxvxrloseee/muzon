@@ -2,6 +2,7 @@ import { HexColorPicker } from "react-colorful";
 import { useState } from "react";
 import { CloudSettings } from "./CloudSettings";
 import { LibraryFolders } from "./LibraryFolders";
+import { ScrobbleSettings } from "./ScrobbleSettings";
 import { useAppearanceStore } from "../store/appearanceStore";
 import { useHotkeysStore } from "../store/hotkeysStore";
 import { useThemeStore } from "../store/themeStore";
@@ -264,6 +265,8 @@ export function ThemeSettings() {
       </div>
 
       <CloudSettings />
+
+      <ScrobbleSettings />
 
       <h2 className="mb-1 text-lg font-semibold text-text-primary">Горячие клавиши</h2>
       <p className="mb-4 text-sm text-text-secondary">

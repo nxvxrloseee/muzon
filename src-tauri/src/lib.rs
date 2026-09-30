@@ -115,6 +115,12 @@ pub fn run() {
         commands::player::preview_track_tempo,
         commands::player::set_track_tempo,
         commands::player::restore_track,
+        commands::scrobble::get_scrobble_status,
+        commands::scrobble::connect_listenbrainz,
+        commands::scrobble::disconnect_listenbrainz,
+        commands::scrobble::lastfm_begin_auth,
+        commands::scrobble::lastfm_finish_auth,
+        commands::scrobble::disconnect_lastfm,
         commands::session::get_session,
         commands::session::set_session_queue,
         commands::session::set_session_progress,
@@ -221,6 +227,7 @@ pub fn run() {
                 session,
                 scan_lock: Mutex::new(()),
                 library_watcher: Default::default(),
+                scrobbler: data::scrobble::Scrobbler::new(&app_config_dir),
                 appearance_store,
                 appearance: Mutex::new(appearance),
                 window_transparent: appearance.transparent_window,
@@ -232,6 +239,9 @@ pub fn run() {
             // was closed, then follow them live
             let library_handle = app.handle().clone();
             std::thread::spawn(move || data::library_watch::start(&library_handle));
+
+            // Sends whatever listens were left queued last time, then new ones
+            data::scrobble::start(app.handle().clone());
 
             // Queue, favourites and lyrics for desktop shells (see data/control.rs)
             data::control::serve(app.handle().clone());
@@ -296,6 +306,8 @@ pub fn run() {
                 // say the same thing as the one before, so we announce only the
                 // transitions.
                 let mut announced: Option<(bool, Option<String>, bool)> = None;
+                // The track scrobblers were last told is playing
+                let mut now_playing_sent: Option<String> = None;
                 let mut pending = PendingPulses::default();
                 let mut last_frontend_tick = Instant::now();
                 let mut last_session_flush = Instant::now();
@@ -357,6 +369,24 @@ pub fn run() {
                         }
                         state.mpris.notify(properties);
                         announced = Some(current);
+                    }
+
+                    if tick.is_playing && tick.path.is_some() && tick.path != now_playing_sent {
+                        now_playing_sent = tick.path.clone();
+                        let track = tick
+                            .path
+                            .as_deref()
+                            .and_then(|p| state.db.track_by_path(p).ok().flatten());
+                        let started = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
+                        if let Some(listen) = track
+                            .as_ref()
+                            .and_then(|t| domain::scrobble::Listen::from_track(t, started))
+                        {
+                            data::scrobble::now_playing(&handle, listen);
+                        }
                     }
 
                     if last_session_flush.elapsed() >= SESSION_FLUSH_INTERVAL {

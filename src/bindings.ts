@@ -96,6 +96,17 @@ export const commands = {
 	 *  without starting to play by itself.
 	 */
 	restoreTrack: (path: string, positionSecs: number) => __TAURI_INVOKE<null>("restore_track", { path, positionSecs }),
+	getScrobbleStatus: () => __TAURI_INVOKE<ScrobbleStatus>("get_scrobble_status"),
+	/**  Checks the token with ListenBrainz before keeping it. */
+	connectListenbrainz: (token: string) => __TAURI_INVOKE<ScrobbleStatus>("connect_listenbrainz", { token }),
+	disconnectListenbrainz: () => __TAURI_INVOKE<ScrobbleStatus>("disconnect_listenbrainz"),
+	/**
+	 *  First half of connecting Last.fm: returns the page on last.fm where the
+	 *  user approves access. `lastfm_finish_auth` completes it.
+	 */
+	lastfmBeginAuth: (apiKey: string, secret: string) => __TAURI_INVOKE<string>("lastfm_begin_auth", { apiKey, secret }),
+	lastfmFinishAuth: () => __TAURI_INVOKE<ScrobbleStatus>("lastfm_finish_auth"),
+	disconnectLastfm: () => __TAURI_INVOKE<ScrobbleStatus>("disconnect_lastfm"),
 	getSession: () => __TAURI_INVOKE<Session>("get_session"),
 	/**
 	 *  Replaces the queue half of the session. Split from `set_session_progress`
@@ -311,6 +322,21 @@ export type ScanReport = {
 	updated: number,
 	removed: number,
 	errors: string[],
+};
+
+export type ScrobbleStatus = {
+	listenbrainz: ServiceStatus,
+	lastfm: ServiceStatus,
+};
+
+/**  What the settings page shows about one service. */
+export type ServiceStatus = {
+	/**  The account listens go to, or `None` when not connected. */
+	user: string | null,
+	/**  Listens waiting to be sent - kept across restarts. */
+	pending: number,
+	/**  The last failure, cleared by the next success. */
+	lastError: string | null,
 };
 
 /**
