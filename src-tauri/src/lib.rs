@@ -106,6 +106,8 @@ pub fn run() {
         commands::player::set_volume,
         commands::player::stop_playback,
         commands::player::subscribe_playback_ticks,
+        commands::player::subscribe_spectrum,
+        commands::player::unsubscribe_spectrum,
         commands::player::set_next_track,
         commands::player::get_playback_settings,
         commands::player::set_crossfade_seconds,

@@ -72,6 +72,17 @@ export const commands = {
 	setVolume: (volume: number) => __TAURI_INVOKE<null>("set_volume", { volume }),
 	stopPlayback: () => __TAURI_INVOKE<null>("stop_playback"),
 	subscribePlaybackTicks: (channel: Channel<PlaybackTick>) => __TAURI_INVOKE<void>("subscribe_playback_ticks", { channel }),
+	/**
+	 *  Visualizer frames: `crate::data::audio::spectrum::BARS` heights in
+	 *  0..=255, about 30 a second, each delivered as its audio is heard. Only
+	 *  while subscribed - the analysis posts nothing otherwise.
+	 * 
+	 *  Bytes rather than floats: the generated bindings wrap any float sent over
+	 *  a channel in a conversion that fails the frontend's typecheck, and a bar
+	 *  needs nowhere near a float's precision.
+	 */
+	subscribeSpectrum: (channel: Channel<number[]>) => __TAURI_INVOKE<void>("subscribe_spectrum", { channel }),
+	unsubscribeSpectrum: () => __TAURI_INVOKE<void>("unsubscribe_spectrum"),
 	setNextTrack: (path: string | null) => __TAURI_INVOKE<null>("set_next_track", { path }),
 	getPlaybackSettings: () => __TAURI_INVOKE<PlaybackSettings>("get_playback_settings").then((v) => (({...v,eqGains:v.eqGains.map(i=>i)}) as typeof v)),
 	setCrossfadeSeconds: (secs: number) => __TAURI_INVOKE<void>("set_crossfade_seconds", { secs }),

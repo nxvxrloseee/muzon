@@ -98,6 +98,29 @@ pub fn subscribe_playback_ticks(state: State<AppState>, channel: Channel<Playbac
     *state.tick_channel.lock().unwrap() = Some(channel);
 }
 
+/// Visualizer frames: `crate::data::audio::spectrum::BARS` heights in
+/// 0..=255, about 30 a second, each delivered as its audio is heard. Only
+/// while subscribed - the analysis posts nothing otherwise.
+///
+/// Bytes rather than floats: the generated bindings wrap any float sent over
+/// a channel in a conversion that fails the frontend's typecheck, and a bar
+/// needs nowhere near a float's precision.
+#[tauri::command]
+#[specta::specta]
+pub fn subscribe_spectrum(state: State<AppState>, channel: Channel<Vec<u8>>) {
+    state
+        .player
+        .set_spectrum_sink(Some(std::sync::Arc::new(move |bars: Vec<f32>| {
+            let _ = channel.send(bars.iter().map(|b| (b * 255.0).round() as u8).collect());
+        })));
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn unsubscribe_spectrum(state: State<AppState>) {
+    state.player.set_spectrum_sink(None);
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn set_next_track(state: State<AppState>, path: Option<String>) -> Result<(), String> {

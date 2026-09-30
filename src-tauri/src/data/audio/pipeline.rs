@@ -1,4 +1,5 @@
 use super::replay_gain::ReplayGain;
+use super::spectrum::{SpectrumSink, Visualizer};
 use crate::domain::playback_settings::ReplayGainSettings;
 use gstreamer as gst;
 use gst::prelude::*;
@@ -82,6 +83,7 @@ struct Deck {
     eq: gst::Element,
     pitch: gst::Element,
     replay_gain: ReplayGain,
+    spectrum: gst::Element,
     path: Option<String>,
     /// URI handed to this deck's `about-to-finish` handler, which runs on a
     /// GStreamer streaming thread. Deliberately its own small lock rather than
@@ -91,7 +93,7 @@ struct Deck {
 }
 
 impl Deck {
-    fn build() -> anyhow::Result<Self> {
+    fn build(visualizer: &Arc<Visualizer>, is_deck_a: bool) -> anyhow::Result<Self> {
         let playbin = gst::ElementFactory::make("playbin")
             .build()
             .or_else(|_| gst::ElementFactory::make("playbin3").build())?;
@@ -102,11 +104,21 @@ impl Deck {
         let replay_gain = ReplayGain::build()?;
         let eq = gst::ElementFactory::make("equalizer-10bands").build()?;
         let pitch = gst::ElementFactory::make("pitch").build()?;
+        // Last, so the bars show what is heard: levelled, equalised, stretched
+        let spectrum = visualizer.tap(&playbin, is_deck_a)?;
         let convert_out = gst::ElementFactory::make("audioconvert").build()?;
 
+        let chain = [
+            &convert_in,
+            replay_gain.element(),
+            &eq,
+            &pitch,
+            &spectrum,
+            &convert_out,
+        ];
         let bin = gst::Bin::new();
-        bin.add_many([&convert_in, replay_gain.element(), &eq, &pitch, &convert_out])?;
-        gst::Element::link_many([&convert_in, replay_gain.element(), &eq, &pitch, &convert_out])?;
+        bin.add_many(chain)?;
+        gst::Element::link_many(chain)?;
 
         let sink_pad = convert_in
             .static_pad("sink")
@@ -148,6 +160,7 @@ impl Deck {
             eq,
             pitch,
             replay_gain,
+            spectrum,
             path: None,
             next_uri,
         })
@@ -209,6 +222,7 @@ struct Inner {
     crossfade_secs: f64,
     eq_gains: [f64; EQ_BAND_COUNT],
     crossfade: Option<CrossfadeState>,
+    visualizer: Arc<Visualizer>,
     /// Last position reported by the active deck. A gapless hand-off is only
     /// visible as this jumping backwards - see `tick`.
     last_position_secs: f64,
@@ -347,9 +361,11 @@ impl AudioPlayer {
     pub fn new() -> anyhow::Result<Self> {
         gst::init()?;
 
+        let visualizer = Visualizer::new();
         let inner = Inner {
-            deck_a: Deck::build()?,
-            deck_b: Deck::build()?,
+            deck_a: Deck::build(&visualizer, true)?,
+            deck_b: Deck::build(&visualizer, false)?,
+            visualizer,
             active_is_a: true,
             current_path: None,
             next_path: None,
@@ -551,6 +567,16 @@ impl AudioPlayer {
         Ok(())
     }
 
+    /// Starts (`Some`) or stops sending visualizer frames. Stopped, the
+    /// spectrum elements post nothing.
+    pub fn set_spectrum_sink(&self, sink: Option<SpectrumSink>) {
+        let guard = self.inner.lock().unwrap();
+        let on = sink.is_some();
+        guard.visualizer.set_sink(sink);
+        guard.visualizer.enable_on(&guard.deck_a.spectrum, on);
+        guard.visualizer.enable_on(&guard.deck_b.spectrum, on);
+    }
+
     pub fn set_replay_gain(&self, settings: ReplayGainSettings) {
         let guard = self.inner.lock().unwrap();
         guard.deck_a.replay_gain.set_settings(settings);
@@ -665,6 +691,10 @@ impl AudioPlayer {
             // transition. sqrt keeps the two sides summing to one in *power*.
             from_deck.apply_linear_volume(master * (1.0 - t).sqrt());
             to_deck.apply_linear_volume(master * t.sqrt());
+            // The bars follow whichever side is louder
+            guard
+                .visualizer
+                .set_deck_a_audible(active_is_a == (t < 0.5));
 
             if t >= 1.0 {
                 let from_playbin = from_deck.playbin.clone();
@@ -927,6 +957,44 @@ mod tests {
 
         player.set_replay_gain(ReplayGainSettings::default());
         assert_eq!(active_replay_gain_factor(&player), 1.0);
+    }
+
+    #[test]
+    fn the_visualizer_sees_a_tone_where_it_is_and_stops_when_told() {
+        let Some((_gst, player)) = locked_player() else {
+            return;
+        };
+        if player.use_fake_sinks().is_err() {
+            return;
+        }
+        // write_tone is a 440 Hz sine
+        let tone = write_tone("muzon-test-spectrum.wav", 1.5);
+        let frames: Arc<Mutex<Vec<Vec<f32>>>> = Arc::default();
+        let collected = frames.clone();
+        player.set_spectrum_sink(Some(Arc::new(move |bars| collected.lock().unwrap().push(bars))));
+
+        player.load_and_play(tone.to_str().unwrap()).unwrap();
+        tick_until(&player, 200, |tick| tick.position_secs > 0.8).expect("the tone has to play");
+
+        let received = frames.lock().unwrap().clone();
+        assert!(received.len() >= 10, "only {} frames in 0.8s", received.len());
+        let last = received.last().unwrap();
+        assert_eq!(last.len(), super::super::spectrum::BARS);
+        let loudest = last
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .unwrap()
+            .0;
+        // 30 Hz..16 kHz over 48 log bars: 440 Hz sits around bar 20
+        assert!((18..=23).contains(&loudest), "loudest bar {loudest} for 440 Hz");
+
+        player.set_spectrum_sink(None);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let settled = frames.lock().unwrap().len();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(frames.lock().unwrap().len(), settled, "frames kept coming after stopping");
+        player.stop().unwrap();
     }
 
     #[test]

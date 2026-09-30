@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown, CloudDownload, Pause, Pencil, Play } from "lucide-react";
+import { AudioLines, ChevronDown, CloudDownload, Pause, Pencil, Play } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { lyricsApi } from "../api/lyrics";
@@ -11,6 +11,7 @@ import { useUiStore } from "../store/uiStore";
 import type { LrcLine, LrcWord, Lyrics } from "../types";
 import { LrcEditor } from "./LrcEditor";
 import { PlaybackProgress } from "./PlaybackProgress";
+import { SpectrumBars, useVisualizerEnabled } from "./SpectrumBars";
 import { TrackCover } from "./TrackCover";
 
 function paletteGradient(p: TrackPalette): string {
@@ -123,6 +124,7 @@ export function NowPlaying() {
   const seek = usePlayerStore((s) => s.seek);
   const setView = useUiStore((s) => s.setView);
   const palette = useTrackPalette(currentPath);
+  const [visualizerOn, setVisualizerOn] = useVisualizerEnabled();
   const track = useCurrentTrack();
   const [lyrics, setLyrics] = useState<Lyrics | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -212,14 +214,36 @@ export function NowPlaying() {
       </div>
       <div className="absolute inset-0 bg-background/45" />
 
+      {visualizerOn && (
+        <SpectrumBars
+          color={
+            palette?.vibrant ??
+            getComputedStyle(document.documentElement).getPropertyValue("--color-accent-primary")
+          }
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 w-full"
+        />
+      )}
+
       <div className="relative z-10 flex h-full flex-col">
-        <button
-          onClick={() => setView("library")}
-          className="m-4 flex w-fit items-center gap-2 rounded-full bg-card-background/80 px-3 py-1.5 text-sm text-text-primary"
-        >
-          <ChevronDown size={16} />
-          Свернуть
-        </button>
+        <div className="m-4 flex gap-2">
+          <button
+            onClick={() => setView("library")}
+            className="flex w-fit items-center gap-2 rounded-full bg-card-background/80 px-3 py-1.5 text-sm text-text-primary"
+          >
+            <ChevronDown size={16} />
+            Свернуть
+          </button>
+          <button
+            onClick={() => setVisualizerOn(!visualizerOn)}
+            aria-pressed={visualizerOn}
+            title={visualizerOn ? "Выключить визуализатор" : "Включить визуализатор"}
+            className={`flex h-8 w-8 items-center justify-center rounded-full bg-card-background/80 ${
+              visualizerOn ? "text-accent-primary" : "text-text-secondary hover:text-text-primary"
+            }`}
+          >
+            <AudioLines size={16} />
+          </button>
+        </div>
 
         <div className="flex flex-1 items-center justify-center gap-6 overflow-hidden px-10 pb-10">
           <div className="flex w-72 flex-shrink-0 flex-col items-center gap-4 rounded-3xl bg-card-background/80 p-6 shadow-lg">
