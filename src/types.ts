@@ -11,6 +11,8 @@ export type {
   PlaybackTick,
   Playlist,
   RepeatMode,
+  ReplayGainMode,
+  ReplayGainSettings,
   S3Config,
   ScanReport,
   Session,

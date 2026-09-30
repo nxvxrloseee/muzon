@@ -77,6 +77,8 @@ export const commands = {
 	setCrossfadeSeconds: (secs: number) => __TAURI_INVOKE<void>("set_crossfade_seconds", { secs }),
 	saveCrossfadeSeconds: (secs: number) => __TAURI_INVOKE<null>("save_crossfade_seconds", { secs }),
 	setEqualizerBands: (gains: [number, number, number, number, number, number, number, number, number, number]) => __TAURI_INVOKE<null>("set_equalizer_bands", { gains: gains.map(i=>i) }),
+	/**  Applies live and saves; returns the settings as stored (preamp clamped). */
+	setReplayGain: (settings: ReplayGainSettings) => __TAURI_INVOKE<ReplayGainSettings>("set_replay_gain", { settings }),
 	/**
 	 *  Applies `tempo` live to whichever deck currently holds `path` (the audible
 	 *  part of a drag) without touching the DB - called on every slider event.
@@ -228,6 +230,11 @@ export type PlaybackSettings = {
 	crossfadeSecs: number,
 	/**  10-band equalizer gains in dB, roughly -24..12 each. */
 	eqGains: [number, number, number, number, number, number, number, number, number, number],
+	/**
+	 *  Absent from files written before it existed; without the default those
+	 *  would fail to parse and take the EQ down with them.
+	 */
+	replayGain?: ReplayGainSettings,
 };
 
 export type PlaybackTick = {
@@ -263,6 +270,26 @@ export type Playlist = {
 };
 
 export type RepeatMode = "off" | "all" | "one";
+
+export type ReplayGainMode = 
+/**
+ *  Off by default: turning it on makes most music several dB quieter,
+ *  which should be the listener's choice rather than a surprise.
+ */
+"off" | 
+/**  Every track at the same loudness. */
+"track" | 
+/**  Albums at the same loudness, keeping the dynamics between their tracks. */
+"album";
+
+export type ReplayGainSettings = {
+	mode: ReplayGainMode,
+	/**
+	 *  Added on top of the tagged gain, in dB. ReplayGain's reference level is
+	 *  fairly quiet, so this is the knob for bringing it back up.
+	 */
+	preampDb: number,
+};
 
 /**
  *  Where the library is mirrored. Keys are never stored here - they live in the

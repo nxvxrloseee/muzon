@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { playerApi } from "../api/player";
 import { createDebouncedPersist } from "../lib/debouncePersist";
+import type { ReplayGainSettings } from "../types";
 
 export const EQ_BAND_COUNT = 10;
 export const EQ_BAND_FREQS_HZ = [
@@ -9,20 +10,26 @@ export const EQ_BAND_FREQS_HZ = [
 
 const eqPersist = createDebouncedPersist(300);
 const crossfadePersist = createDebouncedPersist(300);
+const replayGainPersist = createDebouncedPersist(300);
+
+export const REPLAY_GAIN_OFF: ReplayGainSettings = { mode: "off", preampDb: 0 };
 
 interface PlaybackSettingsState {
   crossfadeSecs: number;
   eqGains: number[];
+  replayGain: ReplayGainSettings;
   loaded: boolean;
   init: () => Promise<void>;
   setCrossfadeSecs: (secs: number) => void;
   setEqGains: (gains: number[]) => void;
   setEqBand: (index: number, gain: number) => void;
+  setReplayGain: (settings: ReplayGainSettings) => void;
 }
 
 export const usePlaybackSettingsStore = create<PlaybackSettingsState>((set, get) => ({
   crossfadeSecs: 0,
   eqGains: new Array(EQ_BAND_COUNT).fill(0),
+  replayGain: REPLAY_GAIN_OFF,
   loaded: false,
 
   init: async () => {
@@ -30,6 +37,7 @@ export const usePlaybackSettingsStore = create<PlaybackSettingsState>((set, get)
     set({
       crossfadeSecs: settings.crossfadeSecs,
       eqGains: [...settings.eqGains],
+      replayGain: settings.replayGain ?? REPLAY_GAIN_OFF,
       loaded: true,
     });
   },
@@ -57,6 +65,14 @@ export const usePlaybackSettingsStore = create<PlaybackSettingsState>((set, get)
     set({ eqGains: next });
     eqPersist.schedule(() =>
       playerApi.setEqualizerBands(next).catch((e) => console.error("Failed to save EQ", e)),
+    );
+  },
+
+  setReplayGain: (settings) => {
+    set({ replayGain: settings });
+    // Applied and saved by the same command; debounced for the preamp slider
+    replayGainPersist.schedule(() =>
+      playerApi.setReplayGain(settings).catch((e) => console.error("Failed to apply ReplayGain", e)),
     );
   },
 }));

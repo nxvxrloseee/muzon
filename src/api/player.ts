@@ -1,6 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 import { commands } from "../bindings";
-import type { PlaybackTick } from "../types";
+import type { PlaybackTick, ReplayGainSettings } from "../types";
 
 export const playerApi = {
   playTrack: (path: string) => commands.playTrack(path),
@@ -17,6 +17,7 @@ export const playerApi = {
   setNextTrack: (path: string | null) => commands.setNextTrack(path),
   restoreTrack: (path: string, positionSecs: number) => commands.restoreTrack(path, positionSecs),
   getPlaybackSettings: () => commands.getPlaybackSettings(),
+  setReplayGain: (settings: ReplayGainSettings) => commands.setReplayGain(settings),
   setCrossfadeSeconds: (secs: number) => commands.setCrossfadeSeconds(secs),
   saveCrossfadeSeconds: (secs: number) => commands.saveCrossfadeSeconds(secs),
   setEqualizerBands: (gains: number[]) =>

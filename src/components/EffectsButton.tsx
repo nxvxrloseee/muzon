@@ -6,6 +6,70 @@ import {
   usePlaybackSettingsStore,
 } from "../store/playbackSettingsStore";
 import { useTempoStore, useTrackTempo } from "../store/tempoStore";
+import type { ReplayGainMode } from "../types";
+
+const REPLAY_GAIN_MODES: { mode: ReplayGainMode; label: string }[] = [
+  { mode: "off", label: "Выкл." },
+  { mode: "track", label: "Треки" },
+  { mode: "album", label: "Альбомы" },
+];
+
+/** Mirrors `MIN_PREAMP_DB`/`MAX_PREAMP_DB` in `domain/playback_settings.rs`. */
+const PREAMP_MIN = -6;
+const PREAMP_MAX = 12;
+
+function ReplayGainControls() {
+  const replayGain = usePlaybackSettingsStore((s) => s.replayGain);
+  const setReplayGain = usePlaybackSettingsStore((s) => s.setReplayGain);
+  const on = replayGain.mode !== "off";
+
+  return (
+    <div>
+      <div className="mb-1 text-xs text-text-secondary">Выравнивание громкости</div>
+      <div className="flex gap-1 rounded-md bg-card-hover p-0.5">
+        {REPLAY_GAIN_MODES.map(({ mode, label }) => (
+          <button
+            key={mode}
+            onClick={() => setReplayGain({ ...replayGain, mode })}
+            aria-pressed={replayGain.mode === mode}
+            className={`flex-1 rounded px-2 py-1 text-xs ${
+              replayGain.mode === mode
+                ? "bg-accent-primary/25 text-text-primary"
+                : "text-text-secondary hover:text-text-primary"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {on && (
+        <>
+          <div className="mb-1 mt-2 flex justify-between text-xs text-text-secondary">
+            <span>Предусиление</span>
+            <span>
+              {replayGain.preampDb > 0 ? "+" : ""}
+              {replayGain.preampDb.toFixed(1)} дБ
+            </span>
+          </div>
+          <input
+            type="range"
+            min={PREAMP_MIN}
+            max={PREAMP_MAX}
+            step={0.5}
+            value={replayGain.preampDb}
+            onChange={(e) => setReplayGain({ ...replayGain, preampDb: Number(e.target.value) })}
+            className="w-full"
+            style={{ accentColor: "var(--color-accent-primary)" }}
+          />
+          <p className="mt-1 text-[10px] leading-snug text-text-secondary">
+            Работает по тегам ReplayGain в файлах; файлы без них играют как есть. Разметить
+            фонотеку можно, например, утилитой rsgain.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
 
 const PRESETS: Record<string, number[]> = {
   Плоский: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -143,6 +207,8 @@ export function EffectsButton() {
                 style={{ accentColor: "var(--color-accent-primary)" }}
               />
             </div>
+
+            <ReplayGainControls />
           </div>
         </div>
       )}

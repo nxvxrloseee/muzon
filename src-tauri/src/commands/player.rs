@@ -1,5 +1,5 @@
 use crate::data::audio::pipeline::{PlaybackTick, EQ_BAND_COUNT};
-use crate::domain::playback_settings::PlaybackSettings;
+use crate::domain::playback_settings::{PlaybackSettings, ReplayGainSettings};
 use crate::state::AppState;
 use mpris_server::Property;
 use tauri::ipc::Channel;
@@ -151,6 +151,24 @@ pub fn set_equalizer_bands(state: State<AppState>, gains: [f64; EQ_BAND_COUNT]) 
         .playback_settings_store
         .save(&settings)
         .map_err(|e| e.to_string())
+}
+
+/// Applies live and saves; returns the settings as stored (preamp clamped).
+#[tauri::command]
+#[specta::specta]
+pub fn set_replay_gain(
+    state: State<AppState>,
+    settings: ReplayGainSettings,
+) -> Result<ReplayGainSettings, String> {
+    let settings = settings.normalized();
+    state.player.set_replay_gain(settings);
+    let mut stored = state.playback_settings_store.load_or_default();
+    stored.replay_gain = settings;
+    state
+        .playback_settings_store
+        .save(&stored)
+        .map_err(|e| e.to_string())?;
+    Ok(settings)
 }
 
 /// Applies `tempo` live to whichever deck currently holds `path` (the audible

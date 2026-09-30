@@ -111,6 +111,7 @@ pub fn run() {
         commands::player::set_crossfade_seconds,
         commands::player::save_crossfade_seconds,
         commands::player::set_equalizer_bands,
+        commands::player::set_replay_gain,
         commands::player::preview_track_tempo,
         commands::player::set_track_tempo,
         commands::player::restore_track,
@@ -190,6 +191,7 @@ pub fn run() {
             let playback_settings = playback_settings_store.load_or_default();
             player.set_crossfade_seconds(playback_settings.crossfade_secs);
             player.set_equalizer_bands(playback_settings.eq_gains);
+            player.set_replay_gain(playback_settings.replay_gain.normalized());
 
             let s3_config_store = data::s3_config_store::S3ConfigStore::new(&app_config_dir);
             let s3_config = s3_config_store.load_or_default();

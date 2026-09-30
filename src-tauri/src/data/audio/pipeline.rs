@@ -1,3 +1,5 @@
+use super::replay_gain::ReplayGain;
+use crate::domain::playback_settings::ReplayGainSettings;
 use gstreamer as gst;
 use gst::prelude::*;
 use serde::Serialize;
@@ -79,6 +81,7 @@ struct Deck {
     playbin: gst::Element,
     eq: gst::Element,
     pitch: gst::Element,
+    replay_gain: ReplayGain,
     path: Option<String>,
     /// URI handed to this deck's `about-to-finish` handler, which runs on a
     /// GStreamer streaming thread. Deliberately its own small lock rather than
@@ -94,17 +97,21 @@ impl Deck {
             .or_else(|_| gst::ElementFactory::make("playbin3").build())?;
 
         let convert_in = gst::ElementFactory::make("audioconvert").build()?;
+        // Levelling comes first, so the EQ works on audio already at its
+        // normalised loudness rather than boosting into a gain cut after it
+        let replay_gain = ReplayGain::build()?;
         let eq = gst::ElementFactory::make("equalizer-10bands").build()?;
         let pitch = gst::ElementFactory::make("pitch").build()?;
         let convert_out = gst::ElementFactory::make("audioconvert").build()?;
 
         let bin = gst::Bin::new();
-        bin.add_many([&convert_in, &eq, &pitch, &convert_out])?;
-        gst::Element::link_many([&convert_in, &eq, &pitch, &convert_out])?;
+        bin.add_many([&convert_in, replay_gain.element(), &eq, &pitch, &convert_out])?;
+        gst::Element::link_many([&convert_in, replay_gain.element(), &eq, &pitch, &convert_out])?;
 
         let sink_pad = convert_in
             .static_pad("sink")
             .ok_or_else(|| anyhow::anyhow!("audioconvert has no sink pad"))?;
+        replay_gain.follow(&sink_pad);
         let ghost_sink = gst::GhostPad::with_target(&sink_pad)?;
         ghost_sink.set_active(true)?;
         bin.add_pad(&ghost_sink)?;
@@ -140,6 +147,7 @@ impl Deck {
             playbin,
             eq,
             pitch,
+            replay_gain,
             path: None,
             next_uri,
         })
@@ -543,6 +551,12 @@ impl AudioPlayer {
         Ok(())
     }
 
+    pub fn set_replay_gain(&self, settings: ReplayGainSettings) {
+        let guard = self.inner.lock().unwrap();
+        guard.deck_a.replay_gain.set_settings(settings);
+        guard.deck_b.replay_gain.set_settings(settings);
+    }
+
     pub fn set_equalizer_bands(&self, gains: [f64; EQ_BAND_COUNT]) {
         let mut guard = self.inner.lock().unwrap();
         guard.eq_gains = gains;
@@ -840,6 +854,79 @@ mod tests {
             "the pair took {total:.3}s, short of the 1.2s of audio in them - \
              samples were dropped at the join"
         );
+    }
+
+    /// A FLAC whose vorbis comments carry a ReplayGain track gain, made by
+    /// GStreamer itself: wavparse ignores ID3 chunks, so a tagged WAV would
+    /// never deliver the tag this is meant to test.
+    fn write_tagged_tone(name: &str, seconds: f64, track_gain_db: f64) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        // audiotestsrc's buffers are 1024 samples at 44.1 kHz. The gain is
+        // written with decimals: "-6" parses as an integer, which the double
+        // tag silently refuses.
+        let buffers = (seconds * 44100.0 / 1024.0).ceil() as u32;
+        let pipeline = gst::parse::launch(&format!(
+            "audiotestsrc num-buffers={buffers} ! taginject tags=\"replaygain-track-gain={track_gain_db:.2}\" \
+             ! audioconvert ! flacenc ! filesink location=\"{}\"",
+            path.display()
+        ))
+        .unwrap();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        let bus = pipeline.bus().unwrap();
+        bus.timed_pop_filtered(
+            gst::ClockTime::from_seconds(10),
+            &[gst::MessageType::Eos, gst::MessageType::Error],
+        );
+        pipeline.set_state(gst::State::Null).unwrap();
+        path
+    }
+
+    fn active_replay_gain_factor(player: &AudioPlayer) -> f64 {
+        player.inner.lock().unwrap().active().replay_gain.current_factor()
+    }
+
+    #[test]
+    fn replay_gain_follows_each_track_of_a_gapless_run() {
+        let Some((_gst, player)) = locked_player() else {
+            return;
+        };
+        if player.use_fake_sinks().is_err() {
+            return;
+        }
+        // The gain is set where the filter is, ahead of the sink's buffer, so
+        // it moves on to the next track while the end of this one is still to
+        // be heard - each sample has already been levelled on its way past.
+        // A short file would be through the filter before the first check;
+        // three seconds keeps it there long enough to look at.
+        let tagged = write_tagged_tone("muzon-test-rg-tagged.flac", 3.0, -6.0);
+        let untagged = write_tone("muzon-test-rg-untagged.wav", 0.6);
+
+        player.set_crossfade_seconds(0.0);
+        player.set_replay_gain(ReplayGainSettings {
+            mode: crate::domain::playback_settings::ReplayGainMode::Track,
+            preamp_db: 0.0,
+        });
+        player.load_and_play(tagged.to_str().unwrap()).unwrap();
+        player.set_next_track(Some(untagged.to_string_lossy().to_string()));
+
+        tick_until(&player, 200, |tick| tick.position_secs > 0.1)
+            .expect("the tagged track has to start playing");
+        let during_tagged = active_replay_gain_factor(&player);
+        assert!(
+            (during_tagged - 0.501).abs() < 0.01,
+            "a -6 dB track gain should halve the amplitude, got {during_tagged}"
+        );
+
+        tick_until(&player, 600, |tick| tick.auto_advanced_to.is_some())
+            .expect("the untagged track has to follow on");
+        let during_untagged = active_replay_gain_factor(&player);
+        assert_eq!(
+            during_untagged, 1.0,
+            "the previous track's gain must not carry over to one without tags"
+        );
+
+        player.set_replay_gain(ReplayGainSettings::default());
+        assert_eq!(active_replay_gain_factor(&player), 1.0);
     }
 
     #[test]
