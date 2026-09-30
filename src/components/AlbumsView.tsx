@@ -5,6 +5,7 @@ import { useLibraryStore } from "../store/libraryStore";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
+import { useStableGroups } from "../hooks/useStableGroups";
 import { TrackCover } from "./TrackCover";
 import { VirtualizedGrid } from "./VirtualizedGrid";
 import { VirtualizedList } from "./VirtualizedList";
@@ -95,6 +96,8 @@ function AlbumDetail({ group, onBack }: { group: AlbumGroup; onBack: () => void 
   );
 }
 
+const albumKey = (g: AlbumGroup) => g.key;
+
 export function AlbumsView() {
   const tracks = useLibraryStore((s) => s.tracks);
   const query = useSearchStore((s) => s.query);
@@ -102,7 +105,7 @@ export function AlbumsView() {
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
   const openAlbum = useCallback((key: string) => setSelectedKey(key), []);
 
-  const groups = useMemo(() => groupAlbums(tracks), [tracks]);
+  const groups = useStableGroups(tracks, groupAlbums, albumKey);
   const selected = groups.find((g) => g.key === selectedKey) ?? null;
 
   const deferredQuery = useDeferredValue(query);
@@ -144,7 +147,7 @@ export function AlbumsView() {
           estimateRowHeight={230}
           gap={12}
           className="p-4"
-          getItemKey={(g) => g.key}
+          getItemKey={albumKey}
           renderItem={(g) => <AlbumCard group={g} onOpen={openAlbum} />}
         />
       </div>

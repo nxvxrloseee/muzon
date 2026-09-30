@@ -5,6 +5,7 @@ import { useLibraryStore } from "../store/libraryStore";
 import { usePlayerStore } from "../store/playerStore";
 import { useQueueStore } from "../store/queueStore";
 import { useSearchStore } from "../store/searchStore";
+import { useStableGroups } from "../hooks/useStableGroups";
 import { TrackCover } from "./TrackCover";
 import { VirtualizedList } from "./VirtualizedList";
 
@@ -82,6 +83,8 @@ const ArtistRow = memo(function ArtistRow({
   );
 });
 
+const artistKey = (g: ArtistGroup) => g.artist;
+
 export function ArtistsView() {
   const tracks = useLibraryStore((s) => s.tracks);
   const query = useSearchStore((s) => s.query);
@@ -89,7 +92,7 @@ export function ArtistsView() {
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
   const openArtist = useCallback((artist: string) => setSelectedArtist(artist), []);
 
-  const groups = useMemo(() => groupArtists(tracks), [tracks]);
+  const groups = useStableGroups(tracks, groupArtists, artistKey);
   const selected = groups.find((g) => g.artist === selectedArtist) ?? null;
 
   const deferredQuery = useDeferredValue(query);
@@ -128,7 +131,7 @@ export function ArtistsView() {
           estimateSize={52}
           gap={4}
           className="p-4"
-          getItemKey={(g) => g.artist}
+          getItemKey={artistKey}
           renderItem={(g) => <ArtistRow group={g} onOpen={openArtist} />}
         />
       </div>
