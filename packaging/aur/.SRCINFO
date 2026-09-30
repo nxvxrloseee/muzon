@@ -1,6 +1,6 @@
 pkgbase = muzon
 	pkgdesc = Local music player built with Tauri and GStreamer
-	pkgver = 1.5.0
+	pkgver = 1.6.0
 	pkgrel = 1
 	url = https://github.com/nxvxrloseee/muzon
 	arch = x86_64
@@ -18,9 +18,9 @@ pkgbase = muzon
 	depends = gst-plugins-ugly
 	depends = gst-libav
 	depends = libsecret
-	source = muzon-1.5.0.tar.gz::https://github.com/nxvxrloseee/muzon/archive/v1.5.0.tar.gz
+	source = muzon-1.6.0.tar.gz::https://github.com/nxvxrloseee/muzon/archive/v1.6.0.tar.gz
 	source = muzon.desktop
-	sha256sums = 2edfad5fea93cb7f4f7e2f5b4117c17c387ace0a5db0b62504288ae23615a70f
+	sha256sums = 621315f3d6fa25b236d7b5f38c0b1ad3f6ec55a42c45d9e714b7f62cb87e9e69
 	sha256sums = 1aa81d0d072346d9dd30516ec3e802d90da12a737cd55fc5bec2e2a24a2a3738
 
 pkgname = muzon

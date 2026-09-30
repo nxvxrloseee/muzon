@@ -28,7 +28,7 @@ source=(
   "$pkgname-$pkgver.tar.gz::https://github.com/nxvxrloseee/muzon/archive/v$pkgver.tar.gz"
   "$pkgname.desktop"
 )
-sha256sums=('2edfad5fea93cb7f4f7e2f5b4117c17c387ace0a5db0b62504288ae23615a70f'
+sha256sums=('621315f3d6fa25b236d7b5f38c0b1ad3f6ec55a42c45d9e714b7f62cb87e9e69'
             '1aa81d0d072346d9dd30516ec3e802d90da12a737cd55fc5bec2e2a24a2a3738')
 
 build() {
