@@ -338,6 +338,8 @@ export type ScanReport = {
 	added: number,
 	updated: number,
 	removed: number,
+	/**  Renamed or moved files, recognised as the tracks they were. */
+	moved: number,
 	errors: string[],
 };
 

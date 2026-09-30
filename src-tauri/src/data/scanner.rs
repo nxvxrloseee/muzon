@@ -1,8 +1,9 @@
 use crate::data::db::{Db, NewTrack};
 use crate::data::tags;
 use crate::domain::library::ScanReport;
+use crate::domain::Track;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
@@ -38,7 +39,16 @@ enum Scanned {
     Failed(String),
 }
 
-pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
+/// One folder's findings, not yet written.
+#[derive(Default)]
+struct Plan {
+    added: Vec<NewTrack>,
+    updated: Vec<NewTrack>,
+    removed: Vec<String>,
+    errors: Vec<String>,
+}
+
+fn plan(db: &Db, root: &Path) -> anyhow::Result<Plan> {
     let known = db.known_tracks_under(root)?;
 
     // A folder on a drive that isn't mounted is indistinguishable from one
@@ -46,9 +56,9 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
     // their favourites, play counts and playlist places. Leave such a folder
     // alone until it comes back.
     if !root.is_dir() {
-        return Ok(ScanReport {
+        return Ok(Plan {
             errors: vec![format!("{}: папка недоступна", root.display())],
-            ..ScanReport::default()
+            ..Plan::default()
         });
     }
 
@@ -105,28 +115,21 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
         })
         .collect();
 
-    let mut report = ScanReport::default();
-    let mut upserts: Vec<NewTrack> = Vec::new();
+    let mut plan = Plan::default();
     for outcome in scanned {
         match outcome {
             Scanned::Unchanged => {}
-            Scanned::Added(track) => {
-                report.added += 1;
-                upserts.push(*track);
-            }
-            Scanned::Updated(track) => {
-                report.updated += 1;
-                upserts.push(*track);
-            }
-            Scanned::Failed(message) => report.errors.push(message),
+            Scanned::Added(track) => plan.added.push(*track),
+            Scanned::Updated(track) => plan.updated.push(*track),
+            Scanned::Failed(message) => plan.errors.push(message),
         }
     }
 
     // An empty mount point looks the same as an unmounted drive's folder: an
     // existing directory with nothing in it. Losing every file at once is far
     // more likely to be that than a deliberate purge.
-    let removed: Vec<String> = if seen.is_empty() && !known.is_empty() {
-        report.errors.push(format!(
+    plan.removed = if seen.is_empty() && !known.is_empty() {
+        plan.errors.push(format!(
             "{}: в папке не осталось ни одного файла, библиотека не тронута",
             root.display()
         ));
@@ -138,11 +141,125 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
             .cloned()
             .collect()
     };
-    report.removed = removed.len() as u32;
+    Ok(plan)
+}
 
-    db.apply_scan_results(&upserts, &removed)?;
+#[cfg(test)]
+pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
+    scan_roots(db, &[root.to_path_buf()])
+}
 
+/// Scans several library folders as one pass, so a file moved from one of
+/// them to another is recognised as the same track.
+pub fn scan_roots(db: &Db, roots: &[PathBuf]) -> anyhow::Result<ScanReport> {
+    let mut all = Plan::default();
+    for root in roots {
+        let p = plan(db, root)?;
+        all.added.extend(p.added);
+        all.updated.extend(p.updated);
+        all.removed.extend(p.removed);
+        all.errors.extend(p.errors);
+    }
+
+    // Renaming or moving a file makes it vanish from one path and appear at
+    // another. Treated as a delete and an add, that would throw away its
+    // favourite, play count, date added and playlist places - so first pair
+    // up what vanished with what appeared, and keep the row
+    let removed_tracks: Vec<Track> = if all.removed.is_empty() || all.added.is_empty() {
+        Vec::new()
+    } else {
+        let removed: HashSet<&String> = all.removed.iter().collect();
+        db.list_tracks()?
+            .into_iter()
+            .filter(|t| removed.contains(&t.path))
+            .collect()
+    };
+    let pairs = match_moves(&removed_tracks, &all.added);
+
+    let moved_from: HashSet<&str> = pairs
+        .iter()
+        .map(|(r, _)| removed_tracks[*r].path.as_str())
+        .collect();
+    let moved_to: HashSet<usize> = pairs.iter().map(|(_, a)| *a).collect();
+    let moves: Vec<(String, NewTrack)> = pairs
+        .iter()
+        .map(|(r, a)| (removed_tracks[*r].path.clone(), all.added[*a].clone()))
+        .collect();
+    let removed: Vec<String> = all
+        .removed
+        .iter()
+        .filter(|p| !moved_from.contains(p.as_str()))
+        .cloned()
+        .collect();
+    let added: Vec<NewTrack> = all
+        .added
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !moved_to.contains(i))
+        .map(|(_, t)| t)
+        .collect();
+
+    let report = ScanReport {
+        added: added.len() as u32,
+        updated: all.updated.len() as u32,
+        removed: removed.len() as u32,
+        moved: moves.len() as u32,
+        errors: all.errors,
+    };
+    let mut upserts = added;
+    upserts.extend(all.updated);
+    db.apply_scan_results(&upserts, &removed, &moves)?;
     Ok(report)
+}
+
+/// What a file's tags say it is. A rename or a move leaves the file itself
+/// untouched, so all of this comes through the same; the duration is to the
+/// tenth of a second, which two different encodings rarely share.
+type Identity = (String, String, String, Option<i32>, Option<i64>);
+
+fn identity(
+    title: &str,
+    artist: Option<&str>,
+    album: Option<&str>,
+    track_no: Option<i32>,
+    duration_secs: Option<f64>,
+) -> Identity {
+    let norm = |s: Option<&str>| s.unwrap_or("").trim().to_lowercase();
+    (
+        norm(Some(title)),
+        norm(artist),
+        norm(album),
+        track_no,
+        duration_secs.map(|d| (d * 10.0).round() as i64),
+    )
+}
+
+/// Pairs vanished tracks with appeared files that are evidently the same
+/// recording, as `(index into removed, index into added)`.
+///
+/// Only one-to-one matches count. Two copies of a song vanishing, or
+/// appearing, at once can't be told apart - and guessing wrong would give one
+/// file the other's history, which is worse than losing it.
+fn match_moves(removed: &[Track], added: &[NewTrack]) -> Vec<(usize, usize)> {
+    let mut gone: HashMap<Identity, Vec<usize>> = HashMap::new();
+    for (i, t) in removed.iter().enumerate() {
+        let key = identity(&t.title, t.artist.as_deref(), t.album.as_deref(), t.track_no, t.duration_secs);
+        gone.entry(key).or_default().push(i);
+    }
+    let mut new: HashMap<Identity, Vec<usize>> = HashMap::new();
+    for (i, t) in added.iter().enumerate() {
+        let key = identity(&t.title, t.artist.as_deref(), t.album.as_deref(), t.track_no, t.duration_secs);
+        new.entry(key).or_default().push(i);
+    }
+    let mut pairs: Vec<(usize, usize)> = gone
+        .iter()
+        .filter_map(|(key, r)| match (r.as_slice(), new.get(key).map(Vec::as_slice)) {
+            ([r], Some([a])) => Some((*r, *a)),
+            _ => None,
+        })
+        .collect();
+    pairs.sort_unstable();
+    pairs
 }
 
 #[cfg(test)]
@@ -196,6 +313,132 @@ mod tests {
         let track = &db.list_tracks().unwrap()[0];
         assert_eq!(track.genre.as_deref(), Some("Ambient"));
         assert_eq!(track.year, Some(1978));
+    }
+
+    /// A tone with real tags, so it is recognisable after a rename.
+    fn tagged(dir: &Path, name: &str, title: &str) -> PathBuf {
+        let path = write_tone(dir, name, 0.2);
+        crate::data::tag_writer::write_tags(
+            &path,
+            &crate::data::tag_writer::TagEdit {
+                title,
+                artist: Some("Artist"),
+                album: Some("Album"),
+                track_no: Some(1),
+                genre: None,
+                year: None,
+                cover: None,
+            },
+        )
+        .unwrap();
+        path
+    }
+
+    /// Likes, plays and playlists the only track in the library, returning
+    /// its id and the playlist's.
+    fn give_history(db: &Db) -> (i32, i32) {
+        let id = db.list_tracks().unwrap()[0].id;
+        db.toggle_favorite(id).unwrap();
+        db.record_play(id).unwrap();
+        let playlist = db.create_playlist("Mix").unwrap();
+        db.add_track_to_playlist(playlist, id).unwrap();
+        (id, playlist)
+    }
+
+    fn assert_history_kept(db: &Db, id: i32, playlist: i32, now_at: &Path) {
+        let track = db.track_by_path(&now_at.to_string_lossy()).unwrap().unwrap();
+        assert_eq!(track.id, id, "the row should have moved, not been replaced");
+        assert!(track.is_favorite);
+        assert_eq!(track.play_count, 1);
+        assert_eq!(db.playlist_tracks(playlist).unwrap()[0].id, id);
+        assert_eq!(db.list_tracks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_renamed_file_keeps_its_history() {
+        let dir = scratch_dir("scan-rename");
+        let old = tagged(&dir, "a.wav", "Song");
+        let db = open_db(&dir);
+        scan(&db, &dir).unwrap();
+        let (id, playlist) = give_history(&db);
+
+        let new = dir.join("renamed.wav");
+        std::fs::rename(&old, &new).unwrap();
+        let report = scan(&db, &dir).unwrap();
+
+        assert_eq!((report.moved, report.added, report.removed), (1, 0, 0));
+        assert_history_kept(&db, id, playlist, &new);
+    }
+
+    #[test]
+    fn a_file_moved_into_a_subfolder_keeps_its_history() {
+        let dir = scratch_dir("scan-move-sub");
+        let old = tagged(&dir, "a.wav", "Song");
+        let db = open_db(&dir);
+        scan(&db, &dir).unwrap();
+        let (id, playlist) = give_history(&db);
+
+        let new = dir.join("Artist").join("Album").join("a.wav");
+        std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+        std::fs::rename(&old, &new).unwrap();
+        assert_eq!(scan(&db, &dir).unwrap().moved, 1);
+        assert_history_kept(&db, id, playlist, &new);
+    }
+
+    #[test]
+    fn a_file_moved_between_library_folders_keeps_its_history() {
+        let dir = scratch_dir("scan-move-roots");
+        let (one, two) = (dir.join("one"), dir.join("two"));
+        std::fs::create_dir_all(&two).unwrap();
+        let old = tagged(&one, "a.wav", "Song");
+        let db = open_db(&dir);
+        scan_roots(&db, &[one.clone(), two.clone()]).unwrap();
+        let (id, playlist) = give_history(&db);
+
+        // Leave a file behind, or the emptied folder reads as an unplugged drive
+        tagged(&one, "stays.wav", "Other");
+        scan_roots(&db, &[one.clone(), two.clone()]).unwrap();
+        let new = two.join("a.wav");
+        std::fs::rename(&old, &new).unwrap();
+        let report = scan_roots(&db, &[one, two]).unwrap();
+
+        assert_eq!((report.moved, report.removed), (1, 0));
+        let track = db.track_by_path(&new.to_string_lossy()).unwrap().unwrap();
+        assert_eq!(track.id, id);
+        assert!(track.is_favorite);
+        assert_eq!(db.playlist_tracks(playlist).unwrap()[0].id, id);
+    }
+
+    #[test]
+    fn identical_copies_moved_together_are_not_guessed_at() {
+        let dir = scratch_dir("scan-move-twins");
+        let a = tagged(&dir, "a.wav", "Twin");
+        let b = tagged(&dir, "b.wav", "Twin");
+        tagged(&dir, "keep.wav", "Keep");
+        let db = open_db(&dir);
+        scan(&db, &dir).unwrap();
+
+        std::fs::rename(&a, dir.join("c.wav")).unwrap();
+        std::fs::rename(&b, dir.join("d.wav")).unwrap();
+        let report = scan(&db, &dir).unwrap();
+
+        // Which new file had which history can't be known
+        assert_eq!((report.moved, report.added, report.removed), (0, 2, 2));
+    }
+
+    #[test]
+    fn an_untagged_file_renamed_is_a_new_track() {
+        // Its title comes from the file name, so the rename changes what it
+        // is as far as anyone can tell
+        let dir = scratch_dir("scan-rename-untagged");
+        let old = write_tone(&dir, "a.wav", 0.2);
+        write_tone(&dir, "keep.wav", 0.2);
+        let db = open_db(&dir);
+        scan(&db, &dir).unwrap();
+
+        std::fs::rename(&old, dir.join("b.wav")).unwrap();
+        let report = scan(&db, &dir).unwrap();
+        assert_eq!((report.moved, report.added, report.removed), (0, 1, 1));
     }
 
     #[test]

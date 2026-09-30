@@ -64,6 +64,10 @@ interface QueueState {
    * queued at all, since "add to queue" on an idle player otherwise looks like
    * it did nothing. */
   enqueue: (tracks: Track[]) => Promise<void>;
+  /** Swaps each queued track for the library's current copy of it (same id).
+   * A renamed or moved file keeps its id but not its path, and a queue still
+   * holding the old path would fail to play it. */
+  refreshFromLibrary: (tracks: Track[]) => void;
   /** Adds so the tracks play right after the current one. */
   playNextInQueue: (tracks: Track[]) => Promise<void>;
   /** Drops one track. Removing the one playing moves on to whatever followed
@@ -197,6 +201,23 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     pushNextTrackToBackend(get);
   },
 
+  refreshFromLibrary: (tracks) => {
+    const { queue } = get();
+    if (queue.length === 0) return;
+    const byId = new Map(tracks.map((t) => [t.id, t]));
+    let changed = false;
+    const refreshed = queue.map((t) => {
+      const current = byId.get(t.id);
+      if (!current || current === t) return t;
+      changed = true;
+      return current;
+    });
+    if (!changed) return;
+    const nextBefore = get().peekNextPath();
+    set({ queue: refreshed });
+    // The follow-on is armed by path in the player; re-arm if it moved
+    if (get().peekNextPath() !== nextBefore) pushNextTrackToBackend(get);
+  },
   enqueue: async (tracks) => {
     if (tracks.length === 0) return;
     const wasEmpty = get().queue.length === 0;

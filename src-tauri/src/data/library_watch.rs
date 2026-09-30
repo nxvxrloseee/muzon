@@ -117,13 +117,12 @@ pub fn start(app: &AppHandle) {
 pub fn rescan(app: &AppHandle, roots: &[PathBuf]) -> ScanReport {
     let state = app.state::<AppState>();
     let _serial = state.scan_lock.lock().unwrap();
-    let mut report = ScanReport::default();
-    for root in roots {
-        match scanner::scan(&state.db, root) {
-            Ok(r) => report.absorb(r),
-            Err(e) => report.errors.push(format!("{}: {e}", root.display())),
-        }
-    }
+    // One pass over all of them, so a file moved between two library
+    // folders keeps its history
+    let report = scanner::scan_roots(&state.db, roots).unwrap_or_else(|e| ScanReport {
+        errors: vec![e.to_string()],
+        ..ScanReport::default()
+    });
     if report.changed_anything() {
         let _ = app.emit(LIBRARY_CHANGED, report.clone());
     }

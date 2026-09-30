@@ -205,3 +205,28 @@ describe("syncCursorToPath", () => {
     expect(useQueueStore.getState().cursor).toBe(0);
   });
 });
+
+describe("refreshFromLibrary", () => {
+  it("follows a queued track to its new path and re-arms it as next", async () => {
+    await useQueueStore.getState().setQueue(TRACKS, TRACKS[0]);
+    vi.clearAllMocks();
+
+    // Track 2, up next, was renamed: same id, new path
+    const renamed = { ...TRACKS[1], path: "/music/renamed.mp3" };
+    useQueueStore.getState().refreshFromLibrary([TRACKS[0], renamed, TRACKS[2], TRACKS[3]]);
+
+    expect(useQueueStore.getState().queue[1].path).toBe("/music/renamed.mp3");
+    expect(playerApi.setNextTrack).toHaveBeenCalledWith("/music/renamed.mp3");
+  });
+
+  it("leaves the queue alone when nothing in it changed", async () => {
+    await useQueueStore.getState().setQueue(TRACKS, TRACKS[0]);
+    const before = useQueueStore.getState().queue;
+    vi.clearAllMocks();
+
+    useQueueStore.getState().refreshFromLibrary([...TRACKS]);
+
+    expect(useQueueStore.getState().queue).toBe(before);
+    expect(playerApi.setNextTrack).not.toHaveBeenCalled();
+  });
+});

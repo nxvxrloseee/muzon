@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { toast } from "sonner";
 import { libraryApi, type TrackEdit } from "../api/library";
 import type { ScanReport, Track } from "../types";
+import { useQueueStore } from "./queueStore";
 
 interface LibraryState {
   tracks: Track[];
@@ -27,15 +28,16 @@ interface LibraryState {
 }
 
 function reportScan(report: ScanReport, sayWhenNothingChanged = false) {
-  const changed = report.added + report.updated + report.removed > 0;
+  const changed = report.added + report.updated + report.removed + report.moved > 0;
   if (report.errors.length > 0) {
     toast.warning(
       `Добавлено ${report.added}, обновлено ${report.updated}, убрано ${report.removed}, ошибок: ${report.errors.length}`,
       { description: report.errors.slice(0, 3).join("\n") },
     );
   } else if (changed) {
+    const moved = report.moved > 0 ? `, перенесено ${report.moved}` : "";
     toast.success(
-      `Библиотека обновлена: +${report.added}, обновлено ${report.updated}, убрано ${report.removed}`,
+      `Библиотека обновлена: +${report.added}, обновлено ${report.updated}, убрано ${report.removed}${moved}`,
     );
   } else if (sayWhenNothingChanged) {
     toast.success("Изменений нет");
@@ -45,8 +47,9 @@ function reportScan(report: ScanReport, sayWhenNothingChanged = false) {
 /** The backend rescanned something (at startup, on a file change, after a
  * sync) and the library is different now. Returns the unsubscribe. */
 export function followLibraryChanges(): () => void {
-  const unlisten = listen<ScanReport>("library-changed", () => {
-    void useLibraryStore.getState().refreshTracks();
+  const unlisten = listen<ScanReport>("library-changed", async () => {
+    await useLibraryStore.getState().refreshTracks();
+    useQueueStore.getState().refreshFromLibrary(useLibraryStore.getState().tracks);
   });
   return () => void unlisten.then((stop) => stop());
 }

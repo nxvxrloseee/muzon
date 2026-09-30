@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
+#[derive(Clone)]
 pub struct NewTrack {
     pub path: String,
     pub title: String,
@@ -257,13 +258,39 @@ impl Db {
     /// instead of one autocommit per file - the scanner gathers everything first
     /// (tag reads, mtime checks) with the connection unlocked, then hands the
     /// whole batch here so the lock is only held for the actual writes.
+    ///
+    /// `moves` are renamed or moved files, `(old path, what is there now)`:
+    /// the existing row takes the new path, so its id - and with it the
+    /// favourite, play history and playlist places - carries over.
     pub fn apply_scan_results(
         &self,
         upserts: &[NewTrack],
         removed_paths: &[String],
+        moves: &[(String, NewTrack)],
     ) -> rusqlite::Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE tracks SET path = ?2, title = ?3, artist = ?4, album = ?5,
+                    duration_secs = ?6, track_no = ?7, genre = ?8, year = ?9, mtime = ?10
+                 WHERE path = ?1",
+            )?;
+            for (old, t) in moves {
+                stmt.execute(rusqlite::params![
+                    old,
+                    t.path,
+                    t.title,
+                    t.artist,
+                    t.album,
+                    t.duration_secs,
+                    t.track_no,
+                    t.genre,
+                    t.year,
+                    t.mtime
+                ])?;
+            }
+        }
         {
             let mut stmt = tx.prepare(UPSERT_TRACK)?;
             for t in upserts {
@@ -683,6 +710,7 @@ mod tests {
                 sample("/b.mp3", "B", "Artist", "Album", 2),
             ],
             &["/stale.mp3".to_string()],
+            &[],
         )
         .unwrap();
 
@@ -698,7 +726,7 @@ mod tests {
         db.upsert_track(&sample("/b.mp3", "B", "Artist", "Album", 2))
             .unwrap();
 
-        db.apply_scan_results(&[], &["/a.mp3".to_string()]).unwrap();
+        db.apply_scan_results(&[], &["/a.mp3".to_string()], &[]).unwrap();
 
         let tracks = db.list_tracks().unwrap();
         assert_eq!(tracks.len(), 1);
@@ -861,7 +889,7 @@ mod tests {
         let playlist_id = db.create_playlist("Mix").unwrap();
         db.add_track_to_playlist(playlist_id, track_id).unwrap();
 
-        db.apply_scan_results(&[], &["/a.mp3".to_string()]).unwrap();
+        db.apply_scan_results(&[], &["/a.mp3".to_string()], &[]).unwrap();
 
         assert!(db.playlist_tracks(playlist_id).unwrap().is_empty());
     }

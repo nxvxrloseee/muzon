@@ -11,19 +11,14 @@ pub struct ScanReport {
     pub added: u32,
     pub updated: u32,
     pub removed: u32,
+    /// Renamed or moved files, recognised as the tracks they were.
+    pub moved: u32,
     pub errors: Vec<String>,
 }
 
 impl ScanReport {
-    pub fn absorb(&mut self, other: ScanReport) {
-        self.added += other.added;
-        self.updated += other.updated;
-        self.removed += other.removed;
-        self.errors.extend(other.errors);
-    }
-
     pub fn changed_anything(&self) -> bool {
-        self.added + self.updated + self.removed > 0
+        self.added + self.updated + self.removed + self.moved > 0
     }
 }
 
