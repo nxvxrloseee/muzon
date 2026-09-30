@@ -13,6 +13,7 @@ interface AppearanceState {
   init: () => Promise<void>;
   setTransparentWindow: (on: boolean) => void;
   setBackgroundOpacity: (opacity: number) => void;
+  setCloseToTray: (on: boolean) => void;
 }
 
 /** Opacity only means something on a window with an alpha channel; on an
@@ -48,6 +49,13 @@ export const useAppearanceStore = create<AppearanceState>((set, get) => ({
     if (!current) return;
     // Nothing to apply now: the window keeps the alpha channel it was born with
     const next = { ...current, transparentWindow: on };
+    set({ appearance: next });
+    persist(next);
+  },
+  setCloseToTray: (on) => {
+    const current = get().appearance;
+    if (!current) return;
+    const next = { ...current, closeToTray: on };
     set({ appearance: next });
     persist(next);
   },

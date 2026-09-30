@@ -214,6 +214,40 @@ function WindowTransparency() {
   );
 }
 
+function CloseToTray() {
+  const appearance = useAppearanceStore((s) => s.appearance);
+  const setCloseToTray = useAppearanceStore((s) => s.setCloseToTray);
+  if (!appearance) return null;
+  const on = appearance.closeToTray;
+
+  return (
+    <div className="mb-4 rounded-md bg-card-background p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-text-primary">Сворачивать в трей при закрытии</div>
+          <div className="text-xs text-text-secondary">
+            Музыка продолжит играть; вернуть окно — из меню иконки в трее. Нужна панель,
+            которая показывает трей (например, waybar или caelestia).
+          </div>
+        </div>
+        <button
+          onClick={() => setCloseToTray(!on)}
+          aria-pressed={on}
+          className={`h-6 w-11 shrink-0 rounded-full transition-colors ${
+            on ? "bg-accent-primary" : "bg-divider"
+          }`}
+        >
+          <span
+            className={`block h-5 w-5 rounded-full bg-background transition-transform ${
+              on ? "translate-x-[22px]" : "translate-x-[2px]"
+            }`}
+          />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function ThemeSettings() {
   const resetToDefault = useThemeStore((s) => s.resetToDefault);
   const exportToFile = useThemeStore((s) => s.exportToFile);
@@ -230,6 +264,7 @@ export function ThemeSettings() {
 
       <SystemThemeToggle />
       <WindowTransparency />
+      <CloseToTray />
 
       <div className="mb-4 flex flex-wrap gap-2">
         <button

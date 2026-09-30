@@ -164,6 +164,11 @@ pub fn run() {
         .expect("Failed to export typescript bindings");
 
     tauri::Builder::default()
+        // Registered first, as the plugin asks: it has to see a second launch
+        // before anything else starts up
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            data::tray::show_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -230,6 +235,7 @@ pub fn run() {
                 scan_lock: Mutex::new(()),
                 library_watcher: Default::default(),
                 scrobbler: data::scrobble::Scrobbler::new(&app_config_dir),
+                tray: Mutex::new(None),
                 appearance_store,
                 appearance: Mutex::new(appearance),
                 window_transparent: appearance.transparent_window,
@@ -241,6 +247,12 @@ pub fn run() {
             // was closed, then follow them live
             let library_handle = app.handle().clone();
             std::thread::spawn(move || data::library_watch::start(&library_handle));
+
+            // Without libayatana-appindicator there is simply no tray
+            match data::tray::install(app.handle()) {
+                Ok(items) => *app.state::<AppState>().tray.lock().unwrap() = Some(items),
+                Err(e) => eprintln!("[muzon] трей недоступен: {e}"),
+            }
 
             // Sends whatever listens were left queued last time, then new ones
             data::scrobble::start(app.handle().clone());
@@ -369,6 +381,12 @@ pub fn run() {
                                 .control
                                 .publish("playback", serde_json::json!({ "isPlaying": current.0 }));
                         }
+                        let label = current
+                            .1
+                            .as_deref()
+                            .and_then(|p| state.db.track_by_path(p).ok().flatten())
+                            .map(|t| data::tray::track_label(&t.title, t.artist.as_deref()));
+                        data::tray::update(&handle, label, current.0);
                         state.mpris.notify(properties);
                         announced = Some(current);
                     }

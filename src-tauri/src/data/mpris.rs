@@ -167,19 +167,15 @@ fn art_url(app: &AppHandle, track_path: &str) -> Option<String> {
 
 impl RootInterface for MprisPlayer {
     async fn raise(&self) -> fdo::Result<()> {
-        if let Some(window) = self.app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.set_focus();
-        }
+        // Also brings back a window closed into the tray
+        crate::data::tray::show_window(&self.app);
         Ok(())
     }
 
     async fn quit(&self) -> fdo::Result<()> {
-        // `close`, not `destroy`: this has to go through the same close request
-        // the app intercepts to flush settings and write the session out.
-        if let Some(window) = self.app.get_webview_window("main") {
-            let _ = window.close();
-        }
+        // Not a window close: with close-to-tray on that would only hide it.
+        // The frontend saves everything and then closes for good.
+        let _ = self.app.emit(crate::data::tray::QUIT_REQUESTED, ());
         Ok(())
     }
 

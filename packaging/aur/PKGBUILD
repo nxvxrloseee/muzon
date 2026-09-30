@@ -15,8 +15,10 @@ depends=(
   'gst-plugins-bad'
   'gst-plugins-ugly'
   'gst-libav'
-  # secret-tool: ключи доступа к S3 хранятся в связке ключей системы
+  # secret-tool: ключи S3 и токены скробблинга хранятся в связке ключей системы
   'libsecret'
+  # иконка в трее (StatusNotifierItem)
+  'libayatana-appindicator'
 )
 makedepends=(
   'rust'

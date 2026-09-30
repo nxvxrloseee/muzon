@@ -8,6 +8,7 @@ use crate::data::mpris::MprisBridge;
 use crate::data::playback_settings_store::PlaybackSettingsStore;
 use crate::data::s3_config_store::S3ConfigStore;
 use crate::data::scrobble::Scrobbler;
+use crate::data::tray::TrayItems;
 use crate::data::session_store::SessionState;
 use crate::data::theme_store::{ThemeSource, ThemeStore};
 use crate::domain::{Appearance, Hotkeys, S3Config, Theme};
@@ -33,6 +34,8 @@ pub struct AppState {
     pub scan_lock: Mutex<()>,
     pub library_watcher: LibraryWatcher,
     pub scrobbler: Scrobbler,
+    /// `None` when no tray could be made (no appindicator library).
+    pub tray: Mutex<Option<TrayItems>>,
     pub appearance_store: AppearanceStore,
     pub appearance: Mutex<Appearance>,
     /// What the window was actually created with - `appearance` may already

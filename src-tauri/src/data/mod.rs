@@ -20,3 +20,4 @@ pub mod system_theme;
 pub mod tag_writer;
 pub mod tags;
 pub mod theme_store;
+pub mod tray;

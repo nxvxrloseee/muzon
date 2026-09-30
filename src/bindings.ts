@@ -203,6 +203,12 @@ export type Appearance = {
 	 *  `MIN_BACKGROUND_OPACITY` to 1.
 	 */
 	backgroundOpacity: number,
+	/**
+	 *  Closing the window hides it into the tray and playback carries on.
+	 *  Off by default: where the panel has no tray, a hidden window could
+	 *  only be brought back through MPRIS.
+	 */
+	closeToTray: boolean,
 };
 
 export type Hotkeys = {

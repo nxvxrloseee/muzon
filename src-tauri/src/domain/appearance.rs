@@ -14,6 +14,10 @@ pub struct Appearance {
     /// How opaque the window's backgrounds are while it is transparent, from
     /// `MIN_BACKGROUND_OPACITY` to 1.
     pub background_opacity: f64,
+    /// Closing the window hides it into the tray and playback carries on.
+    /// Off by default: where the panel has no tray, a hidden window could
+    /// only be brought back through MPRIS.
+    pub close_to_tray: bool,
 }
 
 impl Default for Appearance {
@@ -21,6 +25,7 @@ impl Default for Appearance {
         Self {
             transparent_window: false,
             background_opacity: 0.85,
+            close_to_tray: false,
         }
     }
 }
@@ -32,6 +37,7 @@ impl Default for Appearance {
 struct Stored {
     transparent_window: Option<bool>,
     background_opacity: Option<f64>,
+    close_to_tray: Option<bool>,
 }
 
 impl Appearance {
@@ -48,6 +54,7 @@ impl Appearance {
                 background_opacity: stored
                     .background_opacity
                     .unwrap_or(default.background_opacity),
+                close_to_tray: stored.close_to_tray.unwrap_or(default.close_to_tray),
             }
             .normalized(),
         )
@@ -77,16 +84,19 @@ mod tests {
         let low = Appearance {
             transparent_window: true,
             background_opacity: 0.0,
+            ..Appearance::default()
         };
         assert_eq!(low.normalized().background_opacity, MIN_BACKGROUND_OPACITY);
         let high = Appearance {
             transparent_window: true,
             background_opacity: 7.0,
+            ..Appearance::default()
         };
         assert_eq!(high.normalized().background_opacity, 1.0);
         let nan = Appearance {
             transparent_window: true,
             background_opacity: f64::NAN,
+            ..Appearance::default()
         };
         assert_eq!(
             nan.normalized().background_opacity,
