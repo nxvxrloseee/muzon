@@ -1,6 +1,6 @@
 [package]
 name = "muzon"
-version = "1.5.0"
+version = "1.6.0"
 description = "Muzon music player"
 authors = ["nxvxrloseee"]
 edition = "2021"
@@ -59,3 +59,12 @@ specta-typescript = "0.0.12"
 # The one test that talks to LRCLIB needs an async test harness; it is
 # `#[ignore]`d, so this is only ever pulled in for `cargo test`.
 tokio = { version = "1", features = ["macros", "rt", "time"] }
+
+# The defaults leave a release build split into 16 codegen units with no
+# cross-crate inlining, which is what the AUR package ships. Fat LTO is slow
+# to link but only paid once per release. No `panic = "abort"`: a panic in a
+# helper thread would then take the whole player down instead of one worker.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
