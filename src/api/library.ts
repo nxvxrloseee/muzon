@@ -5,6 +5,8 @@ export interface TrackEdit {
   artist: string | null;
   album: string | null;
   trackNo: number | null;
+  genre: string | null;
+  year: number | null;
   coverPath: string | null;
 }
 
@@ -21,6 +23,8 @@ export const libraryApi = {
       edit.artist,
       edit.album,
       edit.trackNo,
+      edit.genre,
+      edit.year,
       edit.coverPath,
     ),
   toggleFavorite: (trackId: number) => commands.toggleFavorite(trackId),

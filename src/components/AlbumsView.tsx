@@ -31,7 +31,9 @@ const AlbumCard = memo(function AlbumCard({
       />
       <div className="min-w-0">
         <div className="truncate text-sm font-medium text-text-primary">{group.album}</div>
-        <div className="truncate text-xs text-text-secondary">{group.artist}</div>
+        <div className="truncate text-xs text-text-secondary">
+          {group.year ? `${group.artist} · ${group.year}` : group.artist}
+        </div>
       </div>
     </button>
   );
@@ -61,7 +63,9 @@ function AlbumDetail({ group, onBack }: { group: AlbumGroup; onBack: () => void 
           />
           <div>
             <div className="text-xl font-semibold text-text-primary">{group.album}</div>
-            <div className="text-sm text-text-secondary">{group.artist}</div>
+            <div className="text-sm text-text-secondary">
+              {group.year ? `${group.artist} · ${group.year}` : group.artist}
+            </div>
           </div>
         </div>
       </div>

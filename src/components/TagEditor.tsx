@@ -32,6 +32,8 @@ export function TagEditor({
   const [artist, setArtist] = useState("");
   const [album, setAlbum] = useState("");
   const [trackNo, setTrackNo] = useState("");
+  const [genre, setGenre] = useState("");
+  const [year, setYear] = useState("");
   const [newCoverPath, setNewCoverPath] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +44,8 @@ export function TagEditor({
     setArtist(track.artist ?? "");
     setAlbum(track.album ?? "");
     setTrackNo(track.track_no != null ? String(track.track_no) : "");
+    setGenre(track.genre ?? "");
+    setYear(track.year != null ? String(track.year) : "");
     setNewCoverPath(null);
     setError(null);
   }, [track]);
@@ -64,6 +68,8 @@ export function TagEditor({
         artist: artist.trim() || null,
         album: album.trim() || null,
         trackNo: trackNo.trim() ? Number(trackNo) : null,
+        genre: genre.trim() || null,
+        year: year.trim() ? Number(year) : null,
         coverPath: newCoverPath,
       });
       onOpenChange(false);
@@ -124,6 +130,24 @@ export function TagEditor({
               className="w-20"
               value={trackNo}
               onChange={(e) => setTrackNo(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[1fr_auto] gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="tag-genre">Жанр</Label>
+            <Input id="tag-genre" value={genre} onChange={(e) => setGenre(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="tag-year">Год</Label>
+            <Input
+              id="tag-year"
+              type="number"
+              min={0}
+              className="w-20"
+              value={year}
+              onChange={(e) => setYear(e.target.value)}
             />
           </div>
         </div>

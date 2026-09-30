@@ -28,7 +28,7 @@ export const commands = {
 	 *  Rewrites the file's tags, which is blocking file I/O - and so has no
 	 *  business running on the GTK main thread either.
 	 */
-	updateTrackTags: (path: string, title: string, artist: string | null, album: string | null, trackNo: number | null, coverPath: string | null) => __TAURI_INVOKE<Track>("update_track_tags", { path, title, artist, album, trackNo, coverPath }).then((v) => (({...v,duration_secs:v.duration_secs==null?v.duration_secs:v.duration_secs,last_played_at:v.last_played_at==null?v.last_played_at:v.last_played_at}) as typeof v)),
+	updateTrackTags: (path: string, title: string, artist: string | null, album: string | null, trackNo: number | null, genre: string | null, year: number | null, coverPath: string | null) => __TAURI_INVOKE<Track>("update_track_tags", { path, title, artist, album, trackNo, genre, year, coverPath }).then((v) => (({...v,duration_secs:v.duration_secs==null?v.duration_secs:v.duration_secs,last_played_at:v.last_played_at==null?v.last_played_at:v.last_played_at}) as typeof v)),
 	toggleFavorite: (trackId: number) => __TAURI_INVOKE<boolean>("toggle_favorite", { trackId }),
 	/**
 	 *  Counts one listen. A single indexed UPDATE, so it stays synchronous - the
@@ -345,6 +345,8 @@ export type Track = {
 	album: string | null,
 	duration_secs: number | null,
 	track_no: number | null,
+	genre: string | null,
+	year: number | null,
 	is_favorite: boolean,
 	/**  Playback speed multiplier without pitch shift; 1.0 = normal. */
 	tempo: number,

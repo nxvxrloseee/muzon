@@ -11,6 +11,8 @@ function track(id: number, path: string): Track {
     album: null,
     duration_secs: 100,
     track_no: null,
+    genre: null,
+    year: null,
     is_favorite: false,
     tempo: 1,
     play_count: 0,

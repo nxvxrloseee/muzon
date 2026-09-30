@@ -9,6 +9,8 @@ pub struct TagData {
     pub album: Option<String>,
     pub duration_secs: Option<f64>,
     pub track_no: Option<i32>,
+    pub genre: Option<String>,
+    pub year: Option<i32>,
 }
 
 pub fn read_tags(path: &Path) -> anyhow::Result<TagData> {
@@ -27,6 +29,13 @@ pub fn read_tags(path: &Path) -> anyhow::Result<TagData> {
     let artist = tag.and_then(|t| t.artist()).map(|s| s.to_string());
     let album = tag.and_then(|t| t.album()).map(|s| s.to_string());
     let track_no = tag.and_then(|t| t.track()).map(|n| n as i32);
+    let genre = tag
+        .and_then(|t| t.genre())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    // lofty falls back to the recording date's first four digits, which is
+    // where most formats actually keep the year
+    let year = tag.and_then(|t| t.year()).filter(|y| *y > 0).map(|y| y as i32);
 
     Ok(TagData {
         title,
@@ -34,5 +43,7 @@ pub fn read_tags(path: &Path) -> anyhow::Result<TagData> {
         album,
         duration_secs,
         track_no,
+        genre,
+        year,
     })
 }

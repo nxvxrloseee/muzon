@@ -11,6 +11,8 @@ pub struct NewTrack {
     pub album: Option<String>,
     pub duration_secs: Option<f64>,
     pub track_no: Option<i32>,
+    pub genre: Option<String>,
+    pub year: Option<i32>,
     pub mtime: i64,
 }
 
@@ -21,7 +23,36 @@ pub struct Db {
 /// Every column of `tracks`, in the order `row_to_track` reads them. One list
 /// rather than three copies that have to be kept in step by hand.
 const TRACK_COLUMNS: &str = "id, path, title, artist, album, duration_secs, track_no, \
-     is_favorite, tempo, play_count, last_played_at, added_at";
+     is_favorite, tempo, play_count, last_played_at, added_at, genre, year";
+
+/// Writes what the file's tags say and nothing else: favourites, tempo and
+/// play history are the user's, and a rescan must never touch them.
+const UPSERT_TRACK: &str =
+    "INSERT INTO tracks (path, title, artist, album, duration_secs, track_no, genre, year, mtime, added_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, strftime('%s','now'))
+     ON CONFLICT(path) DO UPDATE SET
+        title = excluded.title,
+        artist = excluded.artist,
+        album = excluded.album,
+        duration_secs = excluded.duration_secs,
+        track_no = excluded.track_no,
+        genre = excluded.genre,
+        year = excluded.year,
+        mtime = excluded.mtime";
+
+fn upsert_params(t: &NewTrack) -> impl rusqlite::Params + '_ {
+    (
+        &t.path,
+        &t.title,
+        &t.artist,
+        &t.album,
+        &t.duration_secs,
+        &t.track_no,
+        &t.genre,
+        &t.year,
+        &t.mtime,
+    )
+}
 
 fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {
     Ok(Track {
@@ -37,6 +68,8 @@ fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {
         play_count: row.get(9)?,
         last_played_at: row.get(10)?,
         added_at: row.get(11)?,
+        genre: row.get(12)?,
+        year: row.get(13)?,
     })
 }
 
@@ -108,6 +141,14 @@ impl Db {
             // own mtime is the closest thing to it - better than presenting a
             // whole library as having appeared at the epoch.
             conn.execute("UPDATE tracks SET added_at = mtime", [])?;
+        }
+        let added_genre = add_column_if_missing(&conn, "genre", "genre TEXT")?;
+        let added_year = add_column_if_missing(&conn, "year", "year INTEGER")?;
+        if added_genre || added_year {
+            // Rows scanned before these columns existed never had them read.
+            // Forgetting the mtimes makes the next scan re-read every file once
+            // instead of skipping them all as unchanged.
+            conn.execute("UPDATE tracks SET mtime = 0", [])?;
         }
 
         Ok(Self {
@@ -184,26 +225,7 @@ impl Db {
 
     pub fn upsert_track(&self, t: &NewTrack) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO tracks (path, title, artist, album, duration_secs, track_no, mtime, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s','now'))
-             ON CONFLICT(path) DO UPDATE SET
-                title = excluded.title,
-                artist = excluded.artist,
-                album = excluded.album,
-                duration_secs = excluded.duration_secs,
-                track_no = excluded.track_no,
-                mtime = excluded.mtime",
-            rusqlite::params![
-                t.path,
-                t.title,
-                t.artist,
-                t.album,
-                t.duration_secs,
-                t.track_no,
-                t.mtime
-            ],
-        )?;
+        conn.execute(UPSERT_TRACK, upsert_params(t))?;
         Ok(())
     }
 
@@ -219,27 +241,9 @@ impl Db {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         {
-            let mut stmt = tx.prepare(
-                "INSERT INTO tracks (path, title, artist, album, duration_secs, track_no, mtime, added_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s','now'))
-                 ON CONFLICT(path) DO UPDATE SET
-                    title = excluded.title,
-                    artist = excluded.artist,
-                    album = excluded.album,
-                    duration_secs = excluded.duration_secs,
-                    track_no = excluded.track_no,
-                    mtime = excluded.mtime",
-            )?;
+            let mut stmt = tx.prepare(UPSERT_TRACK)?;
             for t in upserts {
-                stmt.execute(rusqlite::params![
-                    t.path,
-                    t.title,
-                    t.artist,
-                    t.album,
-                    t.duration_secs,
-                    t.track_no,
-                    t.mtime
-                ])?;
+                stmt.execute(upsert_params(t))?;
             }
         }
         {
@@ -429,6 +433,8 @@ mod tests {
             album: Some(album.to_string()),
             duration_secs: Some(180.0),
             track_no: Some(track_no),
+            genre: None,
+            year: None,
             mtime: 1000,
         }
     }
@@ -447,6 +453,56 @@ mod tests {
         let tracks = db.list_tracks().unwrap();
         assert_eq!(tracks.len(), 1, "re-scanning the same path must not duplicate the row");
         assert_eq!(tracks[0].title, "New Title");
+    }
+
+    #[test]
+    fn genre_and_year_are_stored_and_updated_by_a_rescan() {
+        let db = Db::open_in_memory().unwrap();
+        let mut track = sample("/a.mp3", "T", "A", "Al", 1);
+        track.genre = Some("Jazz".into());
+        track.year = Some(1959);
+        db.upsert_track(&track).unwrap();
+        let stored = db.track_by_path("/a.mp3").unwrap().unwrap();
+        assert_eq!(stored.genre.as_deref(), Some("Jazz"));
+        assert_eq!(stored.year, Some(1959));
+
+        track.genre = None;
+        db.upsert_track(&track).unwrap();
+        assert_eq!(db.track_by_path("/a.mp3").unwrap().unwrap().genre, None);
+    }
+
+    #[test]
+    fn a_library_from_before_genre_and_year_is_re_read_once() {
+        // The shape of the table before these columns: every file's mtime is
+        // known, so without the migration a scan would skip them all forever.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tracks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                artist TEXT,
+                album TEXT,
+                duration_secs REAL,
+                track_no INTEGER,
+                mtime INTEGER NOT NULL
+            );
+            INSERT INTO tracks (path, title, mtime) VALUES ('/old.mp3', 'Old', 1234);",
+        )
+        .unwrap();
+
+        let db = Db::from_connection(conn).unwrap();
+        let known = db.known_tracks_under(Path::new("/")).unwrap();
+        assert_eq!(known.get("/old.mp3"), Some(&0));
+
+        // Opening again must not reset anything a second time
+        let conn = db.conn.into_inner().unwrap();
+        conn.execute("UPDATE tracks SET mtime = 99", []).unwrap();
+        let db = Db::from_connection(conn).unwrap();
+        assert_eq!(
+            db.known_tracks_under(Path::new("/")).unwrap().get("/old.mp3"),
+            Some(&99)
+        );
     }
 
     #[test]

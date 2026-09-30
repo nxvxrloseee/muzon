@@ -4,6 +4,7 @@ export type ViewName =
   | "library"
   | "albums"
   | "artists"
+  | "genres"
   | "playlists"
   | "settings"
   | "now-playing";

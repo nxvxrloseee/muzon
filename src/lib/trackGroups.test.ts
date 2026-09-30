@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { groupAlbums, groupArtists, keepUnchangedGroups } from "./trackGroups";
+import {
+  groupAlbums,
+  groupArtists,
+  groupGenres,
+  keepUnchangedGroups,
+  UNKNOWN_GENRE,
+} from "./trackGroups";
 import type { Track } from "../types";
 
 function track(overrides: Partial<Track> & { title: string }): Track {
@@ -10,6 +16,8 @@ function track(overrides: Partial<Track> & { title: string }): Track {
     album: null,
     duration_secs: 200,
     track_no: null,
+    genre: null,
+    year: null,
     is_favorite: false,
     tempo: 1,
     play_count: 0,
@@ -60,5 +68,40 @@ describe("keepUnchangedGroups", () => {
     const next = keepUnchangedGroups(prev, groupAlbums(library.slice(0, 2)), albumKey);
     expect(next).not.toBe(prev);
     expect(next).toEqual([prev[0]]);
+  });
+});
+
+describe("groupGenres", () => {
+  it("puts untagged tracks last instead of in alphabetical order", () => {
+    const groups = groupGenres([
+      track({ id: 1, title: "x" }),
+      track({ id: 2, title: "y", genre: "Rock" }),
+      track({ id: 3, title: "z", genre: "Ambient" }),
+    ]);
+    expect(groups.map((g) => g.genre)).toEqual(["Ambient", "Rock", UNKNOWN_GENRE]);
+  });
+});
+
+describe("years", () => {
+  it("orders an artist's albums oldest first, undated ones last", () => {
+    const groups = groupAlbums([
+      track({ id: 1, title: "a", artist: "A", album: "Late", year: 2001 }),
+      track({ id: 2, title: "b", artist: "A", album: "Undated" }),
+      track({ id: 3, title: "c", artist: "A", album: "Early", year: 1990 }),
+    ]);
+    expect(groups.map((g) => [g.album, g.year])).toEqual([
+      ["Early", 1990],
+      ["Late", 2001],
+      ["Undated", null],
+    ]);
+  });
+
+  it("dates an album by its earliest tagged track", () => {
+    const [group] = groupAlbums([
+      track({ id: 1, title: "a", album: "X", year: 1999 }),
+      track({ id: 2, title: "b", album: "X", year: 1997 }),
+      track({ id: 3, title: "c", album: "X" }),
+    ]);
+    expect(group.year).toBe(1997);
   });
 });

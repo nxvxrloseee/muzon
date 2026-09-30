@@ -6,6 +6,7 @@ import {
   Mic2,
   Search,
   Settings,
+  Tags,
 } from "lucide-react";
 import { useCommandPaletteStore } from "../store/commandPaletteStore";
 import { useLibraryStore } from "../store/libraryStore";
@@ -16,6 +17,7 @@ const NAV_ITEMS: { view: ViewName; label: string; icon: typeof Library }[] = [
   { view: "library", label: "Библиотека", icon: Library },
   { view: "albums", label: "Альбомы", icon: Disc3 },
   { view: "artists", label: "Исполнители", icon: Mic2 },
+  { view: "genres", label: "Жанры", icon: Tags },
   { view: "playlists", label: "Плейлисты", icon: ListMusic },
   { view: "settings", label: "Настройки", icon: Settings },
 ];

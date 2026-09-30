@@ -1,7 +1,7 @@
 import type { Track } from "../types";
 
 /**
- * Lowercased "title / artist / album" blob per track, built once and cached
+ * Lowercased "title / artist / album / genre" blob per track, built once and cached
  * against the track object itself. Filtering used to lowercase all three fields
  * of every track on every keystroke, which for a large library is a few
  * hundred thousand throwaway strings per typed character.
@@ -14,7 +14,8 @@ const haystacks = new WeakMap<Track, string>();
 function haystack(track: Track): string {
   let value = haystacks.get(track);
   if (value === undefined) {
-    value = `${track.title}\n${track.artist ?? ""}\n${track.album ?? ""}`.toLowerCase();
+    value =
+      `${track.title}\n${track.artist ?? ""}\n${track.album ?? ""}\n${track.genre ?? ""}`.toLowerCase();
     haystacks.set(track, value);
   }
   return value;

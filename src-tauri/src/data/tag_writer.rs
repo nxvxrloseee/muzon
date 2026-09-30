@@ -10,6 +10,8 @@ pub struct TagEdit<'a> {
     pub artist: Option<&'a str>,
     pub album: Option<&'a str>,
     pub track_no: Option<i32>,
+    pub genre: Option<&'a str>,
+    pub year: Option<i32>,
     /// (mime type, image bytes) - replaces any existing embedded cover(s).
     pub cover: Option<(&'a str, &'a [u8])>,
 }
@@ -38,6 +40,14 @@ pub fn write_tags(path: &Path, edit: &TagEdit) -> anyhow::Result<()> {
     match edit.track_no {
         Some(n) if n > 0 => tag.set_track(n as u32),
         _ => tag.remove_track(),
+    }
+    match edit.genre {
+        Some(g) if !g.trim().is_empty() => tag.set_genre(g.trim().to_string()),
+        _ => tag.remove_genre(),
+    }
+    match edit.year {
+        Some(y) if y > 0 => tag.set_year(y as u32),
+        _ => tag.remove_year(),
     }
 
     if let Some((mime, bytes)) = edit.cover {

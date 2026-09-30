@@ -33,6 +33,8 @@ function track(id: number, title = `Track ${id}`): Track {
     album: null,
     duration_secs: 180,
     track_no: null,
+    genre: null,
+    year: null,
     is_favorite: false,
     tempo: 1,
     play_count: 0,

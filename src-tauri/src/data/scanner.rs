@@ -79,6 +79,8 @@ pub fn scan(db: &Db, root: &Path) -> anyhow::Result<ScanReport> {
                         album: t.album,
                         duration_secs: t.duration_secs,
                         track_no: t.track_no,
+                        genre: t.genre,
+                        year: t.year,
                         mtime,
                     });
                     if known_mtime.is_none() {
@@ -146,6 +148,32 @@ mod tests {
         assert_eq!(report.removed, 0);
         assert!(report.errors.is_empty());
         assert_eq!(db.list_tracks().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn genre_and_year_come_from_the_file_tags() {
+        let dir = scratch_dir("scan-genre-year");
+        let path = write_tone(&dir, "a.wav", 0.1);
+        crate::data::tag_writer::write_tags(
+            &path,
+            &crate::data::tag_writer::TagEdit {
+                title: "Tone",
+                artist: None,
+                album: None,
+                track_no: None,
+                genre: Some("Ambient"),
+                year: Some(1978),
+                cover: None,
+            },
+        )
+        .unwrap();
+        let db = open_db(&dir);
+
+        scan(&db, &dir).unwrap();
+
+        let track = &db.list_tracks().unwrap()[0];
+        assert_eq!(track.genre.as_deref(), Some("Ambient"));
+        assert_eq!(track.year, Some(1978));
     }
 
     #[test]

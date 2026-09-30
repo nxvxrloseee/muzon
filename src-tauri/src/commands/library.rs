@@ -122,6 +122,8 @@ pub async fn update_track_tags(
     artist: Option<String>,
     album: Option<String>,
     track_no: Option<i32>,
+    genre: Option<String>,
+    year: Option<i32>,
     cover_path: Option<String>,
 ) -> Result<Track, String> {
     tokio::task::spawn_blocking(move || {
@@ -135,6 +137,8 @@ pub async fn update_track_tags(
                 artist,
                 album,
                 track_no,
+                genre,
+                year,
                 cover_path,
             },
         )

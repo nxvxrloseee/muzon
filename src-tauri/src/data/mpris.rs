@@ -130,6 +130,14 @@ pub fn build_metadata(app: &AppHandle) -> Metadata {
             if let Some(album) = track.album {
                 builder = builder.album(album);
             }
+            if let Some(genre) = track.genre {
+                builder = builder.genre([genre]);
+            }
+            // xesam:contentCreated is an ISO 8601 date; a bare year is the
+            // most the tags usually say
+            if let Some(year) = track.year {
+                builder = builder.content_created(format!("{year:04}"));
+            }
         }
         None => builder = builder.trackid(TrackId::NO_TRACK),
     }

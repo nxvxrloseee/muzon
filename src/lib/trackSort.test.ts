@@ -10,6 +10,8 @@ function track(overrides: Partial<Track> & { title: string }): Track {
     album: null,
     duration_secs: 200,
     track_no: null,
+    genre: null,
+    year: null,
     is_favorite: false,
     tempo: 1,
     play_count: 0,

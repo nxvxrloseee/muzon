@@ -19,6 +19,8 @@ pub struct TrackEditInput {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub track_no: Option<i32>,
+    pub genre: Option<String>,
+    pub year: Option<i32>,
     /// Path to an image file to embed as the new cover; `None` leaves any
     /// existing embedded cover untouched.
     pub cover_path: Option<String>,
@@ -61,6 +63,8 @@ pub fn update_tags(db: &Db, track_path: &Path, edit: TrackEditInput) -> anyhow::
             artist: edit.artist.as_deref(),
             album: edit.album.as_deref(),
             track_no: edit.track_no,
+            genre: edit.genre.as_deref(),
+            year: edit.year,
             cover,
         },
     )?;
@@ -81,6 +85,8 @@ pub fn update_tags(db: &Db, track_path: &Path, edit: TrackEditInput) -> anyhow::
         album: tag_data.album,
         duration_secs: tag_data.duration_secs,
         track_no: tag_data.track_no,
+        genre: tag_data.genre,
+        year: tag_data.year,
         mtime,
     })?;
 

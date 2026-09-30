@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 import { AlbumsView } from "./components/AlbumsView";
 import { ArtistsView } from "./components/ArtistsView";
 import { CommandPalette } from "./components/CommandPalette";
+import { GenresView } from "./components/GenresView";
 import { NowPlaying } from "./components/NowPlaying";
 import { PlayerBar } from "./components/PlayerBar";
 import { PlaylistsView } from "./components/PlaylistsView";
@@ -87,6 +88,7 @@ function App() {
             {view === "playlists" && <PlaylistsView />}
             {view === "albums" && <AlbumsView />}
             {view === "artists" && <ArtistsView />}
+            {view === "genres" && <GenresView />}
             {view === "library" && <TrackList />}
           </div>
         </main>
