@@ -1,8 +1,23 @@
 import { Reorder } from "motion/react";
-import { Heart, Pencil, Plus, Trash2, X } from "lucide-react";
+import {
+  CalendarPlus,
+  Flame,
+  Heart,
+  History,
+  Hourglass,
+  type LucideIcon,
+  Pencil,
+  Plus,
+  Save,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { tracksLabel } from "../lib/plural";
+import { SMART_PLAYLISTS, type SmartPlaylistId, smartPlaylist } from "../lib/smartPlaylists";
 import { useLibraryStore } from "../store/libraryStore";
 import { usePlaylistStore } from "../store/playlistStore";
 import { useQueueStore } from "../store/queueStore";
@@ -10,6 +25,15 @@ import { useSearchStore } from "../store/searchStore";
 import type { Track } from "../types";
 import { TrackCover } from "./TrackCover";
 import { VirtualizedList } from "./VirtualizedList";
+
+const SMART_ICONS: Record<SmartPlaylistId, LucideIcon> = {
+  favorites: Heart,
+  "most-played": Flame,
+  "recently-played": History,
+  forgotten: Hourglass,
+  "never-played": Sparkles,
+  "recently-added": CalendarPlus,
+};
 
 function TrackRow({
   track,
@@ -21,9 +45,10 @@ function TrackRow({
 }: {
   track: Track;
   onPlay: () => void;
-  onRemove: () => void;
-  removeIcon: React.ReactNode;
-  removeTitle: string;
+  /** Smart lists other than favourites have nothing to remove a track from. */
+  onRemove?: () => void;
+  removeIcon?: React.ReactNode;
+  removeTitle?: string;
   draggable: boolean;
 }) {
   const content = (
@@ -40,13 +65,15 @@ function TrackRow({
           </div>
         </div>
       </button>
-      <button
-        onClick={onRemove}
-        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-text-secondary hover:bg-card-hover hover:text-red-400"
-        title={removeTitle}
-      >
-        {removeIcon}
-      </button>
+      {onRemove && (
+        <button
+          onClick={onRemove}
+          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-text-secondary hover:bg-card-hover hover:text-red-400"
+          title={removeTitle}
+        >
+          {removeIcon}
+        </button>
+      )}
     </>
   );
 
@@ -78,12 +105,13 @@ export function PlaylistsView() {
   const deletePlaylist = usePlaylistStore((s) => s.deletePlaylist);
   const removeTrack = usePlaylistStore((s) => s.removeTrack);
   const reorderTracks = usePlaylistStore((s) => s.reorderTracks);
+  const saveAsPlaylist = usePlaylistStore((s) => s.saveAsPlaylist);
   const setQueue = useQueueStore((s) => s.setQueue);
   const libraryTracks = useLibraryStore((s) => s.tracks);
   const setFavorite = useLibraryStore((s) => s.setFavorite);
   const query = useSearchStore((s) => s.query);
 
-  const [showFavorites, setShowFavorites] = useState(false);
+  const [smartId, setSmartId] = useState<SmartPlaylistId | null>(null);
   const [newName, setNewName] = useState("");
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -93,10 +121,14 @@ export function PlaylistsView() {
     refreshPlaylists();
   }, [refreshPlaylists]);
 
-  const favoriteTracks = useMemo(
-    () => libraryTracks.filter((t) => t.is_favorite),
-    [libraryTracks],
-  );
+  // Every smart list at once, for the counts beside their names. The library
+  // only changes on a scan, a like or a counted listen, so this is cheap.
+  const smartTracks = useMemo(() => {
+    const now = Date.now() / 1000;
+    return new Map(SMART_PLAYLISTS.map((p) => [p.id, p.select(libraryTracks, now)]));
+  }, [libraryTracks]);
+  const shownSmart = smartId ? smartPlaylist(smartId) : null;
+  const shownSmartTracks = smartId ? smartTracks.get(smartId)! : [];
 
   const selected = playlists.find((p) => p.id === selectedId) ?? null;
 
@@ -113,12 +145,12 @@ export function PlaylistsView() {
   }
 
   function openPlaylist(id: number) {
-    setShowFavorites(false);
+    setSmartId(null);
     selectPlaylist(id);
   }
 
-  function openFavorites() {
-    setShowFavorites(true);
+  function openSmart(id: SmartPlaylistId) {
+    setSmartId(id);
     selectPlaylist(null);
   }
 
@@ -138,22 +170,34 @@ export function PlaylistsView() {
         </div>
 
         <div className="mt-2 flex flex-col gap-1">
-          <button
-            onClick={openFavorites}
-            className={`flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${
-              showFavorites ? "bg-card-hover text-text-primary" : "text-text-primary hover:bg-card-hover"
-            }`}
-          >
-            <Heart size={14} className="text-red-500" fill="currentColor" />
-            Любимые{" "}
-            <span className="text-xs text-text-secondary">({favoriteTracks.length})</span>
-          </button>
+          {SMART_PLAYLISTS.map((p) => {
+            const Icon = SMART_ICONS[p.id];
+            return (
+              <button
+                key={p.id}
+                onClick={() => openSmart(p.id)}
+                className={`flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text-primary ${
+                  smartId === p.id ? "bg-card-hover" : "hover:bg-card-hover"
+                }`}
+              >
+                {p.id === "favorites" ? (
+                  <Heart size={14} className="text-red-500" fill="currentColor" />
+                ) : (
+                  <Icon size={14} className="text-accent-primary" />
+                )}
+                <span className="truncate">{p.name}</span>
+                <span className="text-xs text-text-secondary">({smartTracks.get(p.id)!.length})</span>
+              </button>
+            );
+          })}
+
+          <div className="my-1 border-t border-divider" />
 
           {filteredPlaylists.map((p) => (
             <div
               key={p.id}
               className={`group flex items-center gap-2 rounded-md px-3 py-2 ${
-                !showFavorites && p.id === selectedId ? "bg-card-hover" : "hover:bg-card-hover"
+                !smartId && p.id === selectedId ? "bg-card-hover" : "hover:bg-card-hover"
               }`}
             >
               {renamingId === p.id ? (
@@ -199,32 +243,64 @@ export function PlaylistsView() {
 
       <div ref={scrollWrapperRef} data-lenis-prevent className="flex-1 overflow-y-auto p-4">
         <div>
-        {showFavorites ? (
-          favoriteTracks.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-text-secondary">
-              Пока нет любимых треков — отметьте их сердечком в библиотеке
+        {shownSmart ? (
+          shownSmartTracks.length === 0 ? (
+            <div className="flex h-full items-center justify-center px-8 text-center text-text-secondary">
+              {shownSmart.empty}
             </div>
           ) : (
-            // Padding already lives on the scroll wrapper below (p-4), so no
-            // className/gap padding is needed here.
-            <VirtualizedList
-              items={favoriteTracks}
-              scrollElementRef={scrollWrapperRef}
-              estimateSize={56}
-              gap={4}
-              overscan={8}
-              getItemKey={(t) => t.id}
-              renderItem={(t) => (
-                <TrackRow
-                  track={t}
-                  draggable={false}
-                  onPlay={() => setQueue(favoriteTracks, t)}
-                  onRemove={() => setFavorite(t.id, false)}
-                  removeIcon={<Heart size={14} fill="currentColor" />}
-                  removeTitle="Убрать из любимых"
-                />
-              )}
-            />
+            <>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h1 className="text-lg font-semibold text-text-primary">{shownSmart.name}</h1>
+                  <div className="text-xs text-text-secondary">
+                    {tracksLabel(shownSmartTracks.length)} · обновляется сам
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    saveAsPlaylist(
+                      `${shownSmart.name} · ${new Date().toLocaleDateString("ru-RU")}`,
+                      shownSmartTracks.map((t) => t.id),
+                    )
+                  }
+                  title="Сохранить нынешний состав как обычный плейлист"
+                >
+                  <Save size={14} />
+                  Сохранить как плейлист
+                </Button>
+              </div>
+              {/* Padding already lives on the scroll wrapper below (p-4), so no
+                  className/gap padding is needed here. */}
+              <VirtualizedList
+                items={shownSmartTracks}
+                scrollElementRef={scrollWrapperRef}
+                estimateSize={56}
+                gap={4}
+                overscan={8}
+                getItemKey={(t) => t.id}
+                renderItem={(t) =>
+                  smartId === "favorites" ? (
+                    <TrackRow
+                      track={t}
+                      draggable={false}
+                      onPlay={() => setQueue(shownSmartTracks, t)}
+                      onRemove={() => setFavorite(t.id, false)}
+                      removeIcon={<Heart size={14} fill="currentColor" />}
+                      removeTitle="Убрать из любимых"
+                    />
+                  ) : (
+                    <TrackRow
+                      track={t}
+                      draggable={false}
+                      onPlay={() => setQueue(shownSmartTracks, t)}
+                    />
+                  )
+                }
+              />
+            </>
           )
         ) : !selected ? (
           <div className="flex h-full items-center justify-center text-text-secondary">

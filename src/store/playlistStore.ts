@@ -12,6 +12,8 @@ interface PlaylistState {
   refreshPlaylists: () => Promise<void>;
   selectPlaylist: (id: number | null) => Promise<void>;
   createPlaylist: (name: string) => Promise<void>;
+  /** A fixed copy of a smart list, to keep or reorder by hand. */
+  saveAsPlaylist: (name: string, trackIds: number[]) => Promise<void>;
   renamePlaylist: (id: number, name: string) => Promise<void>;
   deletePlaylist: (id: number) => Promise<void>;
   addTrack: (playlistId: number, trackId: number) => Promise<void>;
@@ -60,6 +62,19 @@ export const usePlaylistStore = create<PlaylistState>((set, get) => ({
     }
   },
 
+  saveAsPlaylist: async (name, trackIds) => {
+    try {
+      const playlist = await playlistsApi.createPlaylist(name);
+      // One at a time: each append takes the next position, so order holds
+      for (const trackId of trackIds) {
+        await playlistsApi.addTrackToPlaylist(playlist.id, trackId);
+      }
+      await get().refreshPlaylists();
+      toast.success(`Сохранено как «${name}»`);
+    } catch (e) {
+      toast.error(`Не удалось сохранить плейлист: ${String(e)}`);
+    }
+  },
   renamePlaylist: async (id, name) => {
     try {
       await playlistsApi.renamePlaylist(id, name);
