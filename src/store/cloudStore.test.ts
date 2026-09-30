@@ -11,7 +11,8 @@ const calls = {
 };
 
 vi.mock("../bindings", () => ({ commands: calls }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+const listen = vi.fn();
+vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
 const { useCloudStore } = await import("./cloudStore");
 
@@ -23,6 +24,18 @@ beforeEach(() => {
 });
 
 describe("настройки хранилища", () => {
+  it("не копит слушателей событий синхронизации при каждом открытии настроек", async () => {
+    calls.getS3Config.mockResolvedValue({});
+    calls.hasS3Credentials.mockResolvedValue(false);
+    const before = listen.mock.calls.length;
+
+    for (let visit = 0; visit < 5; visit++) await useCloudStore.getState().init();
+
+    // Не больше двух за всё время жизни страницы, сколько бы раз ни открывали
+    expect(listen.mock.calls.length - before).toBeLessThanOrEqual(2);
+    expect(listen.mock.calls.length).toBe(2);
+  });
+
   it("дополняет неполный конфиг значениями по умолчанию", async () => {
     // Rust отдаёт поля необязательными: в старом s3.json их может не быть
     calls.getS3Config.mockResolvedValue({ bucket: "music" });

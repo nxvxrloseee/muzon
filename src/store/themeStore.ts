@@ -21,6 +21,8 @@ interface ThemeState {
   importFromFile: () => Promise<boolean>;
 }
 
+let followingShell = false;
+
 export const useThemeStore = create<ThemeState>((set, get) => ({
   theme: null,
   source: "manual",
@@ -34,11 +36,15 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     applyThemeToDom(theme);
     set({ theme, source, systemAvailable });
 
-    // The shell repainted itself (new wallpaper): follow along
-    listen<Theme>("theme-changed", (e) => {
-      applyThemeToDom(e.payload);
-      set({ theme: e.payload });
-    });
+    // The shell repainted itself (new wallpaper): follow along. Once only,
+    // however many times `init` runs (React's dev mode runs effects twice)
+    if (!followingShell) {
+      followingShell = true;
+      void listen<Theme>("theme-changed", (e) => {
+        applyThemeToDom(e.payload);
+        set({ theme: e.payload });
+      });
+    }
   },
   setSource: async (source) => {
     const theme = await themeApi.setSource(source);

@@ -43,6 +43,8 @@ const emptyConfig: FullS3Config = {
   pathStyle: true,
 };
 
+let followingSync = false;
+
 export const useCloudStore = create<CloudState>((set, get) => ({
   config: emptyConfig,
   hasCredentials: false,
@@ -59,8 +61,13 @@ export const useCloudStore = create<CloudState>((set, get) => ({
     ]);
     set({ config: { ...emptyConfig, ...config }, hasCredentials });
 
-    listen<SyncProgress>("sync-progress", (e) => set({ progress: e.payload }));
-    listen<SyncOutcome>("sync-done", (e) => set({ outcome: e.payload }));
+    // `init` runs every time the settings page opens; the listeners must not
+    // pile up with it, or each sync event would be handled once per visit
+    if (!followingSync) {
+      followingSync = true;
+      void listen<SyncProgress>("sync-progress", (e) => set({ progress: e.payload }));
+      void listen<SyncOutcome>("sync-done", (e) => set({ outcome: e.payload }));
+    }
   },
 
   setField: (key, value) => set({ config: { ...get().config, [key]: value } }),
