@@ -1,0 +1,38 @@
+[package]
+name = "muzon-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Muzon's Tauri- and Iced-free core: audio engine, library storage and the native playback controller"
+license = "GPL-3.0"
+
+[features]
+test-support = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+# The audio engine itself: playbin decks, the equalizer, gapless/crossfade.
+# Versions match what the Tauri app has always used, so the one shared
+# implementation is the same code the desktop app runs.
+gstreamer = "0.25"
+rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite_migration = "1"
+lofty = "0.22"
+walkdir = "2"
+rayon = "1"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+# Domain types are still the ones the IPC contract exports, so the derives stay
+# where they were; specta is not Tauri.
+specta = { version = "2.0.0-rc.25", features = ["derive"] }
+muzon-queue = { path = "../muzon-queue" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "rustls-native-certs"] }
+tokio = { version = "1", features = ["sync", "time"] }
+httpdate = "1"
+notify = { version = "8", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Muzon Native
+Comment=Native Rust music player
+Exec=muzon-native
+Icon=muzon-native
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=muzon-ui-prototype

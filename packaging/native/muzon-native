@@ -1,0 +1,9 @@
+#!/bin/sh
+# A portable launcher; no automatic discovery of the old Tauri profile.
+set -eu
+prefix=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ "$#" -eq 0 ]; then
+    data_home=${XDG_DATA_HOME:-"${HOME:?HOME is required}/.local/share"}
+    set -- --profile "$data_home/muzon-native"
+fi
+exec "$prefix/libexec/muzon-native" "$@"

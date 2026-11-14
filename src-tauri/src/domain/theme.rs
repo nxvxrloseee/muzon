@@ -64,10 +64,18 @@ impl Theme {
 
     /// Build a theme from a Material You scheme as desktop shells write it
     /// (caelestia, rice, matugen): role name -> hex, with or without '#'.
-    /// Missing roles fall back to the built-in dark theme, so a partial or
-    /// unfamiliar scheme still gives a usable window.
+    /// Missing roles fall back to the matching light/dark built-in theme,
+    /// selected from the palette background so partial light schemes stay legible.
     pub fn from_material(colours: &std::collections::HashMap<String, String>) -> Self {
-        let base = Theme::default_dark();
+        let light = colours.get("surface").or_else(|| colours.get("background"))
+            .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches('#').get(..6)?, 16).ok())
+            .is_some_and(|rgb| {
+                let r = ((rgb >> 16) & 255) as f64;
+                let g = ((rgb >> 8) & 255) as f64;
+                let b = (rgb & 255) as f64;
+                0.2126*r + 0.7152*g + 0.0722*b > 128.0
+            });
+        let base = if light { Theme::default_light() } else { Theme::default_dark() };
         let pick = |names: &[&str], fallback: &str| -> String {
             for name in names {
                 if let Some(hex) = colours.get(*name) {
@@ -134,7 +142,7 @@ impl Theme {
     }
 }
 
-fn is_valid_hex_color(s: &str) -> bool {
+pub(crate) fn is_valid_hex_color(s: &str) -> bool {
     let s = s.strip_prefix('#').unwrap_or(s);
     (s.len() == 6 || s.len() == 8) && s.chars().all(|c| c.is_ascii_hexdigit())
 }

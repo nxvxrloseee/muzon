@@ -40,7 +40,9 @@ pub fn get_theme_source(state: State<AppState>) -> ThemeSource {
 #[specta::specta]
 pub fn set_theme_source(state: State<AppState>, source: ThemeSource) -> Result<Theme, String> {
     let theme = match source {
-        ThemeSource::System => system_theme::load().map_err(|e| e.to_string())?,
+        ThemeSource::System => {
+            system_theme::load().unwrap_or_else(|_| state.theme.lock().unwrap().clone())
+        }
         ThemeSource::Manual => state.theme_store.load_or_default(),
     };
     theme.validate()?;
@@ -54,12 +56,12 @@ pub fn set_theme_source(state: State<AppState>, source: ThemeSource) -> Result<T
     Ok(theme)
 }
 
-/// Whether there is a shell palette to follow at all - the setting is pointless
-/// without one.
+/// Whether a valid desktop palette is available right now. The user can
+/// enable following before it appears; until then the last theme stays.
 #[tauri::command]
 #[specta::specta]
 pub fn system_theme_available() -> bool {
-    system_theme::scheme_path().is_some()
+    system_theme::load().is_ok()
 }
 
 #[tauri::command]
@@ -86,7 +88,15 @@ pub fn import_theme(state: State<AppState>, path: String) -> Result<Theme, Strin
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let theme: Theme = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     theme.validate()?;
-    state.theme_store.save(&theme).map_err(|e| e.to_string())?;
-    *state.theme.lock().unwrap() = theme.clone();
+    // Importing is an explicit choice of a personal palette, just like
+    // editing a colour: the watcher must stop applying the shell's theme.
+    set_theme(state, theme.clone())?;
     Ok(theme)
+}
+
+/// Selected desktop palette path, including a path whose file has not appeared yet.
+#[tauri::command]
+#[specta::specta]
+pub fn system_theme_path() -> Option<String> {
+    system_theme::scheme_path().map(|p| p.to_string_lossy().into_owned())
 }

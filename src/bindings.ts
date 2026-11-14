@@ -175,6 +175,8 @@ export const commands = {
 	 *  without one.
 	 */
 	systemThemeAvailable: () => __TAURI_INVOKE<boolean>("system_theme_available"),
+	/**  Selected desktop palette path, including a path whose file has not appeared yet. */
+	systemThemePath: () => __TAURI_INVOKE<string | null>("system_theme_path"),
 	getDefaultTheme: (mode: string) => __TAURI_INVOKE<Theme>("get_default_theme", { mode }),
 	exportTheme: (path: string) => __TAURI_INVOKE<null>("export_theme", { path }),
 	importTheme: (path: string) => __TAURI_INVOKE<Theme>("import_theme", { path }),

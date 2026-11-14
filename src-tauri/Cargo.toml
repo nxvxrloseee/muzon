@@ -63,7 +63,17 @@ specta = { version = "2.0.0-rc.25", features = ["derive"] }
 tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
 specta-typescript = "0.0.12"
 
+# Pure queue bookkeeping shared with the future playback core (local crate,
+# crates/muzon-queue): the control socket's play-order math comes from here
+muzon-queue = { path = "../crates/muzon-queue" }
+# The audio engine, library storage, tags, covers, local lyrics and the session
+# stores, shared with the native Iced player. This app re-exports them instead
+# of keeping its own copy; the playback controller in there is used by the
+# native player, not here (this app still drives the engine itself).
+muzon-core = { path = "../crates/muzon-core" }
+
 [dev-dependencies]
+muzon-core = { path = "../crates/muzon-core", features = ["test-support"] }
 # The one test that talks to LRCLIB needs an async test harness; it is
 # `#[ignore]`d, so this is only ever pulled in for `cargo test`.
 tokio = { version = "1", features = ["macros", "rt", "time"] }

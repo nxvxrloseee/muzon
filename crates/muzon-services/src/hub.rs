@@ -1,0 +1,343 @@
+//! Owns network workers. Playback communicates through a durable DB outbox.
+use crate::{
+    data::{
+        db::Db,
+        keyring::{Keyring, Vault},
+        s3::{
+            self,
+            sync::{SyncOutcome, SyncProgress},
+        },
+        s3_config_store::S3ConfigStore,
+        scrobble::Scrobbler,
+    },
+    domain::{
+        scrobble::{Listen, ScrobbleStatus},
+        S3Config,
+    },
+};
+use muzon_core::controller::ControllerClient;
+use std::{
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread::JoinHandle,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+pub use tokio_util::sync::CancellationToken;
+pub struct Hub {
+    pub scrobbler: Arc<Scrobbler>,
+    vault: Arc<dyn Vault>,
+    config: Mutex<S3Config>,
+    store: S3ConfigStore,
+    core: ControllerClient,
+    db: Arc<Db>,
+    progress: Arc<Mutex<Option<SyncProgress>>>,
+    error: Arc<Mutex<Option<String>>>,
+    stop: Arc<AtomicBool>,
+    force: Arc<AtomicBool>,
+    cancel: CancellationToken,
+    wake: Arc<tokio::sync::Notify>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    sync_serial: tokio::sync::Mutex<()>,
+}
+impl Hub {
+    pub fn new(profile: &Path, db: Arc<Db>, core: ControllerClient) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(profile.join("config"))?;
+        let vault = Arc::new(Keyring::for_profile(profile)?);
+        Self::with_vault(profile, db, core, vault)
+    }
+    pub fn with_vault(
+        profile: &Path,
+        db: Arc<Db>,
+        core: ControllerClient,
+        vault: Arc<dyn Vault>,
+    ) -> anyhow::Result<Self> {
+        let store = S3ConfigStore::new(&profile.join("config"));
+        let config = Mutex::new(store.load_or_default());
+        let scrobbler = Arc::new(Scrobbler::with_vault(
+            &profile.join("config"),
+            vault.clone(),
+        ));
+        let progress = Arc::new(Mutex::new(None));
+        let error = Arc::new(Mutex::new(None));
+        let stop = Arc::new(AtomicBool::new(false));
+        let wake = Arc::new(tokio::sync::Notify::new());
+        let force = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
+        let thread_force = force.clone();
+        let stopping_token = cancel.clone();
+        let (scrobble, thread_db, thread_core, stopping, stop_wake, thread_error) = (
+            scrobbler.clone(),
+            db.clone(),
+            core.clone(),
+            stop.clone(),
+            wake.clone(),
+            error.clone(),
+        );
+        let worker=std::thread::Builder::new().name("muzon-services".into()).spawn(move||{
+            let runtime=match tokio::runtime::Builder::new_current_thread().enable_all().build(){Ok(runtime)=>runtime,Err(error)=>{*thread_error.lock().unwrap()=Some(error.to_string());return;}};
+            runtime.block_on(async move {
+                let mut retry=Instant::now();let mut previous=None;
+                let mut flusher:Option<tokio::task::JoinHandle<()>>=None;
+                let mut now_playing:Option<tokio::task::JoinHandle<()>>=None;
+                loop {
+                    if stopping.load(Ordering::Acquire){
+                        if let Some(task)=flusher.take(){task.abort();let _=task.await;}
+                        if let Some(task)=now_playing.take(){task.abort();let _=task.await;}
+                        if let Err(error)=drain_outbox(&thread_db,&scrobble){*thread_error.lock().unwrap()=Some(error.to_string());}
+                        break;
+                    }
+                    if flusher.as_ref().is_some_and(|task|task.is_finished()){
+                        if let Some(task)=flusher.take(){if let Err(error)=task.await{*thread_error.lock().unwrap()=Some(error.to_string());}}
+                        retry=Instant::now()+crate::data::scrobble::RETRY_INTERVAL;
+                    }
+                    if thread_force.swap(false,Ordering::AcqRel){retry=Instant::now();previous=None;if let Err(error)=scrobble.recover(){*thread_error.lock().unwrap()=Some(error.to_string());}else{*thread_error.lock().unwrap()=None;}}
+                    match drain_outbox(&thread_db,&scrobble){Ok(true)=>retry=Instant::now(),Ok(false)=>{},Err(error)=>*thread_error.lock().unwrap()=Some(error.to_string())}
+                    let snapshot=thread_core.snapshot();
+                    let identity=if snapshot.is_playing{snapshot.current_path.clone().map(|path|(path,snapshot.cursor))}else{None};
+                    if identity!=previous {
+                        if let Some(task)=now_playing.take(){task.abort();let _=task.await;}
+                        if let Some(track)=snapshot.current_track().filter(|_|identity.is_some()){
+                            let now=SystemTime::now().duration_since(UNIX_EPOCH).map(|d|d.as_secs_f64()).unwrap_or(0.);
+                            if let Some(listen)=Listen::from_track(track,(now-snapshot.position_secs/snapshot.tempo.max(0.01)).round()as i64){let copy=scrobble.clone();now_playing=Some(tokio::spawn(async move{copy.now_playing(listen).await;}));}
+                        }
+                    }
+                    previous=identity;
+                    if flusher.is_none()&&Instant::now()>=retry{let copy=scrobble.clone();flusher=Some(tokio::spawn(async move{copy.flush_all().await;}));}
+                    tokio::select!{_=stopping_token.cancelled()=>{},_=stop_wake.notified()=>{},_=tokio::time::sleep(Duration::from_secs(1))=>{}}
+                }
+            });
+        })?;
+        Ok(Self {
+            scrobbler,
+            vault,
+            config,
+            store,
+            core,
+            db,
+            progress,
+            error,
+            stop,
+            force,
+            cancel,
+            wake,
+            worker: Mutex::new(Some(worker)),
+            sync_serial: tokio::sync::Mutex::new(()),
+        })
+    }
+    pub fn status(&self) -> ScrobbleStatus {
+        self.scrobbler.status()
+    }
+    pub fn error(&self) -> Option<String> {
+        self.error.lock().unwrap().clone()
+    }
+    pub fn config(&self) -> S3Config {
+        self.config.lock().unwrap().clone()
+    }
+    pub fn configure(&self, mut cfg: S3Config) -> anyhow::Result<()> {
+        cfg.endpoint = cfg.endpoint.trim().to_owned();
+        cfg.bucket = cfg.bucket.trim().to_owned();
+        cfg.region = cfg.region.trim().to_owned();
+        if cfg.region.is_empty() {
+            cfg.region = "us-east-1".into();
+        }
+        cfg.prefix = cfg.prefix.trim().to_owned();
+        anyhow::ensure!(
+            cfg.region.len() <= 64
+                && cfg
+                    .region
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+            "Некорректный регион"
+        );
+        anyhow::ensure!(
+            cfg.bucket.len() <= 255
+                && !matches!(cfg.bucket.as_str(), "." | "..")
+                && cfg
+                    .bucket
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')),
+            "Некорректное имя бакета"
+        );
+        anyhow::ensure!(
+            !cfg.prefix.split('/').any(|part| matches!(part, "." | "..")),
+            "Префикс не должен содержать . или .."
+        );
+        let mut validate = cfg.clone();
+        if validate.bucket.is_empty() {
+            validate.bucket = "validation-only".into();
+        }
+        let _ = s3::client::S3Client::new(
+            validate,
+            s3::sigv4::Credentials {
+                access_key: String::new(),
+                secret_key: String::new(),
+                session_token: String::new(),
+            },
+        )?;
+        self.store.save(&cfg)?;
+        *self.config.lock().unwrap() = cfg;
+        Ok(())
+    }
+    pub fn save_keys(&self, access: &str, secret: &str) -> anyhow::Result<()> {
+        s3::creds::save_with(self.vault.as_ref(), access, secret)
+    }
+    pub fn forget_keys(&self) -> anyhow::Result<()> {
+        s3::creds::forget_with(self.vault.as_ref())
+    }
+    pub async fn check(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.config().is_configured(), "Сначала настройте бакет");
+        let vault = self.vault.clone();
+        let credentials =
+            tokio::task::spawn_blocking(move || s3::creds::load_with(vault.as_ref())).await??;
+        s3::client::S3Client::new(self.config(), credentials)?
+            .check_access()
+            .await
+    }
+    pub fn progress(&self) -> Option<SyncProgress> {
+        self.progress.lock().unwrap().clone()
+    }
+    pub async fn sync(&self, cancel: CancellationToken) -> anyhow::Result<SyncOutcome> {
+        let _guard = self
+            .sync_serial
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("Синхронизация уже выполняется"))?;
+        *self.progress.lock().unwrap() = None;
+        let cfg = self.config();
+        anyhow::ensure!(cfg.is_configured(), "Сначала настройте бакет");
+        let vault = self.vault.clone();
+        let creds =
+            tokio::task::spawn_blocking(move || s3::creds::load_with(vault.as_ref())).await??;
+        anyhow::ensure!(!cancel.is_cancelled(), "Синхронизация отменена");
+        let progress = self.progress.clone();
+        let callback = Arc::new(move |value| *progress.lock().unwrap() = Some(value));
+        let core = self.core.clone();
+        let scan = Arc::new(move || -> anyhow::Result<()> {
+            core.rescan();
+            let deadline = Instant::now() + Duration::from_secs(120);
+            loop {
+                let snapshot = core.barrier().map_err(anyhow::Error::msg)?;
+                if !snapshot.scanning {
+                    return Ok(());
+                }
+                anyhow::ensure!(
+                    Instant::now() < deadline,
+                    "Сканирование не завершилось за две минуты"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let result = tokio::select! {_=cancel.cancelled()=>Err(anyhow::anyhow!("Синхронизация отменена")),result=s3::sync::run(self.db.clone(),cfg,creds,callback,scan)=>result};
+        self.core.refresh_library();
+        result
+    }
+    pub fn retry(&self) {
+        self.force.store(true, Ordering::Release);
+        self.wake.notify_one();
+    }
+    pub fn shutdown(&self) {
+        self.stop.store(true, Ordering::Release);
+        self.cancel.cancel();
+        self.wake.notify_one();
+        if let Some(worker) = self.worker.lock().unwrap().take() {
+            let _ = worker.join();
+        }
+    }
+}
+impl Drop for Hub {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+fn drain_outbox(db: &Db, scrobbler: &Scrobbler) -> anyhow::Result<bool> {
+    let pending = db.pending_listens(100)?;
+    let changed = !pending.is_empty();
+    for (id, listen) in pending {
+        scrobbler.try_listen(listen)?;
+        db.acknowledge_listen(id)?;
+    }
+    Ok(changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muzon_core::{
+        controller::{Controller, CoreConfig},
+        data::{playback_settings_store::PlaybackSettingsStore, session_store::SessionStore},
+    };
+    use std::sync::atomic::AtomicUsize;
+    #[derive(Default)]
+    struct SpyVault(AtomicUsize);
+    impl Vault for SpyVault {
+        fn lookup(&self, _: &str) -> Option<String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+        fn store(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            panic!("unexpected credential write")
+        }
+        fn clear(&self, _: &str) -> anyhow::Result<()> {
+            panic!("unexpected credential removal")
+        }
+    }
+    #[test]
+    fn disconnected_hub_never_looks_up_keys_and_shutdown_is_idempotent() {
+        let _gst = crate::testing::gst_lock();
+        let dir = crate::testing::scratch_dir("services-hub-disconnected");
+        std::fs::create_dir_all(dir.join("config")).unwrap();
+        let db = Arc::new(Db::open(&dir.join("muzon.sqlite3")).unwrap());
+        let mut core = Controller::spawn_test(CoreConfig {
+            db: db.clone(),
+            session_store: SessionStore::new(&dir.join("config")),
+            playback_settings_store: PlaybackSettingsStore::new(&dir.join("config")),
+            cover_dir: dir.join("covers"),
+        })
+        .unwrap();
+        let vault = Arc::new(SpyVault::default());
+        let hub = Hub::with_vault(&dir, db, core.client(), vault.clone()).unwrap();
+        hub.retry();
+        // A worker barrier would concern the audio thread only. Shutdown joins the
+        // service thread, including its initial/final drain and cancelled tasks.
+        hub.shutdown();
+        hub.shutdown();
+        assert_eq!(vault.0.load(Ordering::SeqCst), 0);
+        assert!(hub.error().is_none(), "{:?}", hub.error());
+        core.shutdown();
+    }
+    #[test]
+    fn failed_handoff_keeps_the_durable_outbox_for_recovery() {
+        use muzon_core::{data::db::NewTrack, domain::listen::Listen};
+        let dir = crate::testing::scratch_dir("services-handoff-corrupt");
+        let db = Db::open(&dir.join("muzon.sqlite3")).unwrap();
+        db.ensure_listen_outbox().unwrap();
+        db.upsert_track(&NewTrack {
+            path: "/a.wav".into(),
+            title: "A".into(),
+            artist: Some("Artist".into()),
+            album: None,
+            duration_secs: Some(100.),
+            track_no: None,
+            genre: None,
+            year: None,
+            mtime: 0,
+        })
+        .unwrap();
+        let track = db.list_tracks().unwrap().remove(0);
+        let listen = Listen::from_track(&track, 123).unwrap();
+        db.record_play_and_queue(track.id, Some(&listen)).unwrap();
+        let broken = dir.join("scrobble-queue.json");
+        std::fs::write(&broken, b"broken").unwrap();
+        let scrobbler = Scrobbler::with_vault(&dir, Arc::new(SpyVault::default()));
+        assert!(drain_outbox(&db, &scrobbler).is_err());
+        assert_eq!(db.pending_listens(100).unwrap().len(), 1);
+        assert_eq!(std::fs::read(&broken).unwrap(), b"broken");
+        std::fs::write(&broken, b"{}").unwrap();
+        scrobbler.recover().unwrap();
+        assert!(drain_outbox(&db, &scrobbler).unwrap());
+        // No connected account: do not replay history into a future account.
+        assert!(db.pending_listens(100).unwrap().is_empty());
+    }
+}

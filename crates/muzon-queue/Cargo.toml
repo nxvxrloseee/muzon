@@ -1,0 +1,7 @@
+[package]
+name = "muzon-queue"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Pure queue bookkeeping algorithms for Muzon's playback core — a port of src/lib/queueOps.ts and src/lib/shuffle.ts"
+license = "GPL-3.0"

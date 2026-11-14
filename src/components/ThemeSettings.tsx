@@ -1,5 +1,5 @@
 import { HexColorPicker } from "react-colorful";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CloudSettings } from "./CloudSettings";
 import { LibraryFolders } from "./LibraryFolders";
 import { ScrobbleSettings } from "./ScrobbleSettings";
@@ -103,6 +103,13 @@ function HotkeyRow({ action }: { action: keyof Hotkeys }) {
 function SystemThemeToggle() {
   const source = useThemeStore((s) => s.source);
   const available = useThemeStore((s) => s.systemAvailable);
+  const palettePath = useThemeStore((s) => s.systemPath);
+  const refreshSystemStatus = useThemeStore((s) => s.refreshSystemStatus);
+  useEffect(() => {
+    void refreshSystemStatus();
+    const timer = setInterval(() => void refreshSystemStatus(), 2000);
+    return () => clearInterval(timer);
+  }, [refreshSystemStatus]);
   const setSource = useThemeStore((s) => s.setSource);
   const [error, setError] = useState<string | null>(null);
   const on = source === "system";
@@ -124,12 +131,11 @@ function SystemThemeToggle() {
           <div className="text-xs text-text-secondary">
             {available
               ? "Палитра берётся из темы рабочего стола и меняется вместе с обоями"
-              : "Палитра рабочего стола не найдена (caelestia или rice)"}
+              : "Палитра пока недоступна. Ожидание темы Ryoku, caelestia или rice."}
           </div>
         </div>
         <button
           onClick={toggle}
-          disabled={!available && !on}
           aria-pressed={on}
           className={`h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40 ${
             on ? "bg-accent-primary" : "bg-divider"
@@ -142,6 +148,7 @@ function SystemThemeToggle() {
           />
         </button>
       </div>
+      {palettePath && <p className="mt-2 break-all text-xs text-text-secondary">Источник: {palettePath}</p>}
       {on && (
         <p className="mt-2 text-xs text-text-secondary">
           Правка любого цвета ниже вернёт ручную палитру.

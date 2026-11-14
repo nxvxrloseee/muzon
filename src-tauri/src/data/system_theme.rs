@@ -1,92 +1,123 @@
-//! Colours from the desktop shell.
-//!
-//! Shells that generate a Material You palette from the wallpaper write it to a
-//! JSON file: caelestia and rice both use `{"colours": {"primary": "9bd0cc", …}}`
-//! under `$XDG_STATE_HOME`. When the user picks the system theme we read that
-//! file and follow it, so recolouring the desktop recolours Muzon too.
-//!
-//! The file is polled rather than watched: one `stat` every two seconds costs
-//! nothing and saves a dependency on an inotify crate.
-
+//! Desktop palettes: an explicit override, Ryoku's cache, then legacy shells.
 use crate::domain::Theme;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const POLL: Duration = Duration::from_secs(2);
 
-#[derive(serde::Deserialize)]
-struct Scheme {
-    #[serde(alias = "colors")]
-    colours: HashMap<String, String>,
-}
-
-/// Where the shell's palette lives. `MUZON_SCHEME_FILE` wins, so anyone with a
-/// different shell can point Muzon at their own file.
-pub fn scheme_path() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("MUZON_SCHEME_FILE") {
-        let path = PathBuf::from(path);
-        return path.exists().then_some(path);
-    }
-
-    let state = std::env::var_os("XDG_STATE_HOME")
+fn xdg(name: &str, fallback: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|p| !p.is_empty())
         .map(PathBuf::from)
-        .or_else(|| dirs_home().map(|h| h.join(".local/state")))?;
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
+}
 
-    ["caelestia/scheme.json", "rice/scheme.json"]
+fn candidates() -> Vec<PathBuf> {
+    if let Some(path) = std::env::var_os("MUZON_SCHEME_FILE").filter(|p| !p.is_empty()) {
+        return vec![PathBuf::from(path)];
+    }
+    let mut paths = Vec::new();
+    if let Some(cache) = xdg("XDG_CACHE_HOME", ".cache") {
+        paths.push(cache.join("ryoku/colors.json"));
+    }
+    if let Some(state) = xdg("XDG_STATE_HOME", ".local/state") {
+        paths.push(state.join("caelestia/scheme.json"));
+        paths.push(state.join("rice/scheme.json"));
+    }
+    paths
+}
+
+/// The first available source, with Ryoku ahead of leftover legacy files.
+/// An explicit override remains selected even before its file appears.
+pub fn scheme_path() -> Option<PathBuf> {
+    select_path(&candidates())
+}
+fn select_path(paths: &[PathBuf]) -> Option<PathBuf> {
+    paths
         .iter()
-        .map(|rel| state.join(rel))
-        .find(|p| p.exists())
+        .find(|p| p.is_file())
+        .cloned()
+        .or_else(|| paths.first().cloned())
 }
 
-fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
-/// Read the shell's palette and translate it into Muzon's roles.
 pub fn load() -> anyhow::Result<Theme> {
-    let path = scheme_path().ok_or_else(|| anyhow::anyhow!("палитра системы не найдена"))?;
+    let path = scheme_path().ok_or_else(|| anyhow::anyhow!("палитра системы пока недоступна"))?;
     load_from(&path)
 }
 
-pub fn load_from(path: &std::path::Path) -> anyhow::Result<Theme> {
-    let text = std::fs::read_to_string(path)?;
-    let scheme: Scheme = serde_json::from_str(&text)?;
-    Ok(Theme::from_material(&scheme.colours))
+fn parse(text: &str) -> anyhow::Result<Theme> {
+    let value: serde_json::Value = serde_json::from_str(text)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("ожидается карта цветов"))?;
+    let colours = object
+        .get("colours")
+        .or_else(|| object.get("colors"))
+        .unwrap_or(&value);
+    let map: HashMap<String, String> = serde_json::from_value(colours.clone())?;
+    // A random object (or a terminal-only palette) must not look like success.
+    let valid = |key: &str| {
+        map.get(key)
+            .is_some_and(|v| crate::domain::theme::is_valid_hex_color(v.trim()))
+    };
+    anyhow::ensure!(
+        ["surface", "background"].iter().any(|k| valid(k))
+            && valid("primary")
+            && ["onSurface", "onBackground"].iter().any(|k| valid(k)),
+        "неполная палитра: нужны фон, primary и цвет текста"
+    );
+    for (key, color) in &map {
+        anyhow::ensure!(
+            crate::domain::theme::is_valid_hex_color(color.trim()),
+            "неверный цвет роли {key}"
+        );
+    }
+    let theme = Theme::from_material(&map);
+    theme.validate().map_err(anyhow::Error::msg)?;
+    Ok(theme)
+}
+pub fn load_from(path: &Path) -> anyhow::Result<Theme> {
+    parse(&std::fs::read_to_string(path)?)
 }
 
-fn modified(path: &std::path::Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok()?.modified().ok()
+/// Compare the source path AND bytes, not just mtime: atomic replacement,
+/// equal timestamps across sources and short-lived invalid JSON are common.
+#[derive(Default)]
+struct PaletteWatch {
+    accepted: Option<(PathBuf, String)>,
+}
+impl PaletteWatch {
+    fn poll(&mut self, paths: &[PathBuf]) -> Option<Theme> {
+        let Some(path) = select_path(paths) else {
+            self.accepted = None;
+            return None;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            self.accepted = None;
+            return None;
+        };
+        if self.accepted.as_ref() == Some(&(path.clone(), text.clone())) {
+            return None;
+        }
+        let theme = parse(&text).ok()?;
+        self.accepted = Some((path, text));
+        Some(theme)
+    }
 }
 
-/// Follow the palette file until `stop` says otherwise, calling `on_change`
-/// with every new theme. Runs on its own thread.
 pub fn watch<F, S>(on_change: F, stop: S)
 where
     F: Fn(Theme) + Send + 'static,
     S: Fn() -> bool + Send + 'static,
 {
     std::thread::spawn(move || {
-        let mut last = scheme_path().as_deref().and_then(modified);
-
+        let mut watcher = PaletteWatch::default();
         while !stop() {
+            if let Some(theme) = watcher.poll(&candidates()) {
+                on_change(theme);
+            }
             std::thread::sleep(POLL);
-
-            let Some(path) = scheme_path() else {
-                continue;
-            };
-            let Some(stamp) = modified(&path) else {
-                continue;
-            };
-            if Some(stamp) == last {
-                continue;
-            }
-            last = Some(stamp);
-
-            match load_from(&path) {
-                Ok(theme) => on_change(theme),
-                Err(e) => eprintln!("[muzon theme] не удалось прочитать палитру системы: {e}"),
-            }
         }
     });
 }
@@ -94,38 +125,61 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    fn write(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(body.as_bytes()).unwrap();
-        path
-    }
-
+    const FLAT: &str = r##"{"background":"#fafafa","onSurface":"#141414","primary":"#444444"}"##;
     #[test]
-    fn reads_a_shell_scheme() {
-        let dir = std::env::temp_dir().join(format!("muzon-theme-{}", std::process::id()));
-        let path = write(
-            &dir,
-            "scheme.json",
-            r#"{"name":"caelestia","colours":{"surface":"0a0f0f","primary":"9bd0cc","onSurface":"dce8e6"}}"#,
-        );
-
-        let theme = load_from(&path).unwrap();
-        assert_eq!(theme.background, "#0a0f0f");
-        assert_eq!(theme.accent_primary, "#9bd0cc");
-        assert!(theme.validate().is_ok());
-
-        std::fs::remove_dir_all(&dir).ok();
+    fn formats_and_validation() {
+        for text in [
+            FLAT.to_string(),
+            format!("{{\"colours\":{FLAT}}}"),
+            format!("{{\"colors\":{FLAT}}}"),
+            FLAT.replace('#', ""),
+        ] {
+            let theme = parse(&text).unwrap();
+            assert_eq!(theme.background, "#fafafa");
+            assert_eq!(theme.text_primary, "#141414");
+            assert_eq!(
+                theme.card_background,
+                Theme::default_light().card_background
+            );
+        }
+        for text in [
+            "",
+            "{}",
+            "[]",
+            "null",
+            "broken",
+            r#"{"name":"other"}"#,
+            r#"{"primary":"bad"}"#,
+        ] {
+            assert!(parse(text).is_err(), "{text}");
+        }
+        assert!(parse(&FLAT.replace("#444444", "bad")).is_err());
     }
-
     #[test]
-    fn rejects_a_file_that_is_not_a_scheme() {
-        let dir = std::env::temp_dir().join(format!("muzon-theme-bad-{}", std::process::id()));
-        let path = write(&dir, "scheme.json", "not json at all");
-        assert!(load_from(&path).is_err());
-        std::fs::remove_dir_all(&dir).ok();
+    fn appearance_replace_source_switch_and_recovery() {
+        let dir = crate::testing::scratch_dir("palette-watch");
+        let ryoku = dir.join("colors.json");
+        let legacy = dir.join("scheme.json");
+        let paths = [ryoku.clone(), legacy.clone()];
+        let mut watcher = PaletteWatch::default();
+        assert!(watcher.poll(&paths).is_none());
+        std::fs::write(&legacy, FLAT).unwrap();
+        assert!(watcher.poll(&paths).is_some());
+        assert!(watcher.poll(&paths).is_none());
+        std::fs::write(&ryoku, FLAT).unwrap();
+        assert!(watcher.poll(&paths).is_some());
+        std::fs::write(&ryoku, "broken").unwrap();
+        assert!(watcher.poll(&paths).is_none());
+        let replacement = dir.join("tmp");
+        std::fs::write(&replacement, FLAT).unwrap();
+        std::fs::rename(replacement, &ryoku).unwrap();
+        // Same good contents after a transient bad write need no repaint.
+        assert!(watcher.poll(&paths).is_none());
+        std::fs::remove_file(&ryoku).unwrap();
+        assert!(watcher.poll(&paths).is_some());
+        std::fs::remove_file(&legacy).unwrap();
+        assert!(watcher.poll(&paths).is_none());
+        std::fs::write(&legacy, FLAT).unwrap();
+        assert!(watcher.poll(&paths).is_some());
     }
 }

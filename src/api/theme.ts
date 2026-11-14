@@ -9,6 +9,7 @@ export const themeApi = {
   getSource: () => commands.getThemeSource(),
   setSource: (source: ThemeSource) => commands.setThemeSource(source),
   systemAvailable: () => commands.systemThemeAvailable(),
+  systemPath: () => commands.systemThemePath(),
 
   async exportThemeToFile(): Promise<boolean> {
     const path = await save({

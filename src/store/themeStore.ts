@@ -11,8 +11,10 @@ interface ThemeState {
   theme: Theme | null;
   /** "system" follows the desktop shell's palette, "manual" the user's own */
   source: ThemeSource;
-  /** false when no shell palette was found - the switch is then pointless */
+  /** Whether the selected desktop palette can currently be read. */
   systemAvailable: boolean;
+  systemPath: string | null;
+  refreshSystemStatus: () => Promise<void>;
   init: () => Promise<void>;
   setSource: (source: ThemeSource) => Promise<void>;
   setColor: (key: keyof Theme, value: string) => void;
@@ -27,6 +29,11 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
   theme: null,
   source: "manual",
   systemAvailable: false,
+  systemPath: null,
+  refreshSystemStatus: async () => {
+    const [systemAvailable, systemPath] = await Promise.all([themeApi.systemAvailable(), themeApi.systemPath()]);
+    set({ systemAvailable, systemPath });
+  },
   init: async () => {
     const [theme, source, systemAvailable] = await Promise.all([
       themeApi.getTheme(),
@@ -35,6 +42,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     ]);
     applyThemeToDom(theme);
     set({ theme, source, systemAvailable });
+    await get().refreshSystemStatus();
 
     // The shell repainted itself (new wallpaper): follow along. Once only,
     // however many times `init` runs (React's dev mode runs effects twice)

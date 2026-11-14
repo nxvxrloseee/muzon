@@ -1956,6 +1956,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
 name = "hyper"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2738,6 +2744,8 @@ dependencies = [
  "lofty",
  "md-5",
  "mpris-server",
+ "muzon-core",
+ "muzon-queue",
  "notify",
  "rayon",
  "reqwest",
@@ -2760,6 +2768,33 @@ dependencies = [
  "url",
  "walkdir",
 ]
+
+[[package]]
+name = "muzon-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "gstreamer",
+ "httpdate",
+ "image",
+ "lofty",
+ "muzon-queue",
+ "notify",
+ "rayon",
+ "reqwest",
+ "rusqlite",
+ "rusqlite_migration",
+ "serde",
+ "serde_json",
+ "specta",
+ "tokio",
+ "walkdir",
+]
+
+[[package]]
+name = "muzon-queue"
+version = "0.1.0"
 
 [[package]]
 name = "ndk"

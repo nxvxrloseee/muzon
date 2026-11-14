@@ -22,9 +22,11 @@
 //! clients sending a few small messages don't justify pulling tokio's `net`
 //! feature into the build, and nothing here is on the audio path.
 
+use crate::data::queue_adapter;
 use crate::domain::library;
 use crate::domain::session::Session;
 use crate::state::AppState;
+use muzon_queue::play_order_indices;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -47,7 +49,7 @@ pub fn socket_path() -> PathBuf {
 }
 
 struct Subscriber {
-    stream: UnixStream,
+    stream: Arc<Mutex<UnixStream>>,
     topics: Vec<String>,
 }
 
@@ -80,7 +82,7 @@ impl Default for ControlHub {
                     if !s.topics.iter().any(|t| *t == topic || t == "*") {
                         return true;
                     }
-                    s.stream.write_all(line.as_bytes()).is_ok()
+                    s.stream.lock().unwrap().write_all(line.as_bytes()).is_ok()
                 });
             }
         });
@@ -97,8 +99,14 @@ impl ControlHub {
         let _ = self.events.lock().unwrap().send(line);
     }
 
-    fn add(&self, stream: UnixStream, topics: Vec<String>) {
-        self.subscribers.lock().unwrap().push(Subscriber { stream, topics });
+    fn add(&self, stream: Arc<Mutex<UnixStream>>, topics: Vec<String>) {
+        let mut subscribers = self.subscribers.lock().unwrap();
+        subscribers.retain(|s| !Arc::ptr_eq(&s.stream, &stream));
+        subscribers.push(Subscriber { stream, topics });
+    }
+
+    fn remove(&self, stream: &Arc<Mutex<UnixStream>>) {
+        self.subscribers.lock().unwrap().retain(|s| !Arc::ptr_eq(&s.stream, stream));
     }
 }
 
@@ -138,8 +146,10 @@ fn handle_client(app: AppHandle, stream: UnixStream) {
     let Ok(reader_stream) = stream.try_clone() else {
         return;
     };
-    let mut writer = stream;
-    let _ = writer.set_write_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    // Replies and pushed events share this writer so NDJSON frames cannot
+    // interleave, even when a large lyrics response races with a track event.
+    let writer = Arc::new(Mutex::new(stream));
 
     for line in BufReader::new(reader_stream).lines() {
         let Ok(line) = line else { break };
@@ -149,7 +159,7 @@ fn handle_client(app: AppHandle, stream: UnixStream) {
         let request: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                let _ = writeln!(writer, "{}", json!({ "error": format!("bad request: {e}") }));
+                let _ = writeln!(&mut *writer.lock().unwrap(), "{}", json!({ "error": format!("bad request: {e}") }));
                 continue;
             }
         };
@@ -163,13 +173,8 @@ fn handle_client(app: AppHandle, stream: UnixStream) {
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect())
                 .unwrap_or_else(|| vec!["*".into()]);
-            match writer.try_clone() {
-                Ok(events) => {
-                    app.state::<AppState>().control.add(events, topics);
-                    Ok(Value::Bool(true))
-                }
-                Err(e) => Err(e.to_string()),
-            }
+            app.state::<AppState>().control.add(writer.clone(), topics);
+            Ok(Value::Bool(true))
         } else {
             dispatch(&app, method, &params)
         };
@@ -178,10 +183,11 @@ fn handle_client(app: AppHandle, stream: UnixStream) {
             Ok(result) => json!({ "id": id, "result": result }),
             Err(error) => json!({ "id": id, "error": error }),
         };
-        if writeln!(writer, "{response}").is_err() {
+        if writeln!(&mut *writer.lock().unwrap(), "{response}").is_err() {
             break;
         }
     }
+    app.state::<AppState>().control.remove(&writer);
 }
 
 fn dispatch(app: &AppHandle, method: &str, params: &Value) -> Result<Value, String> {
@@ -292,20 +298,25 @@ pub fn queue(app: &AppHandle, before: usize, after: usize) -> Value {
 }
 
 /// `(queue index, play position)` pairs around the playing track, plus the
-/// playing track's play position. Shuffle order applies only when it matches
-/// the queue - a stale permutation is ignored rather than trusted.
+/// playing track's play position. Positions count in the *active* play order
+/// from `muzon-queue` — the un-rotated one, not the queue drawer's view. The
+/// adapter sanitizes the snapshot first: a saved permutation that isn't a
+/// genuine permutation (or a cursor out of range) falls back to the queue's
+/// own order / "nothing playing" rather than being trusted.
 fn play_window(session: &Session, before: usize, after: usize) -> (Vec<(usize, usize)>, Option<usize>) {
-    let n = session.queue_paths.len();
-    let order: Vec<usize> = if session.shuffle && session.shuffle_order.len() == n {
-        session.shuffle_order.iter().map(|&i| i as usize).collect()
-    } else {
-        (0..n).collect()
-    };
-    let playing = usize::try_from(session.cursor)
-        .ok()
+    let shape = queue_adapter::queue_shape(session);
+    let order = play_order_indices(&shape, session.shuffle);
+    let playing = shape
+        .cursor
         .and_then(|cursor| order.iter().position(|&i| i == cursor));
+    let n = order.len();
+    // `before`/`after` arrive from the socket, so usize::MAX is possible:
+    // saturate instead of overflowing the window bounds.
     let (from, to) = match playing {
-        Some(p) => (p.saturating_sub(before), (p + after + 1).min(n)),
+        Some(p) => (
+            p.saturating_sub(before),
+            p.saturating_add(after).saturating_add(1).min(n),
+        ),
         None => (0, after.min(n)),
     };
     let window = (from..to).map(|position| (order[position], position)).collect();
@@ -389,6 +400,18 @@ pub fn cli(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn subscriptions_replace_and_drop_without_waiting_for_an_event() {
+        let hub = super::ControlHub::default();
+        let (server, _client) = std::os::unix::net::UnixStream::pair().unwrap();
+        let writer = std::sync::Arc::new(std::sync::Mutex::new(server));
+        hub.add(writer.clone(), vec!["track".into()]);
+        hub.add(writer.clone(), vec!["queue".into()]);
+        assert_eq!(hub.subscribers.lock().unwrap().len(), 1);
+        hub.remove(&writer);
+        assert!(hub.subscribers.lock().unwrap().is_empty());
+    }
+
     use super::*;
 
     fn session(n: usize, cursor: i32, shuffle: Option<Vec<u32>>) -> Session {
@@ -433,6 +456,48 @@ mod tests {
     #[test]
     fn nothing_playing_starts_at_the_top() {
         let (w, playing) = play_window(&session(5, -1, None), 3, 2);
+        assert_eq!(playing, None);
+        assert_eq!(w, vec![(0, 0), (1, 1)]);
+    }
+
+    #[test]
+    fn window_around_the_middle_of_a_valid_shuffle_order() {
+        // Play order 4, 1, 3, 0, 5, 2; playing queue item 3, which sits at
+        // order position 2. Positions count in the play order, and each item
+        // keeps its queue index for `queue.play`.
+        let (w, playing) = play_window(&session(6, 3, Some(vec![4, 1, 3, 0, 5, 2])), 2, 2);
+        assert_eq!(playing, Some(2));
+        assert_eq!(w, vec![(4, 0), (1, 1), (3, 2), (0, 3), (5, 4)]);
+    }
+
+    #[test]
+    fn a_saved_permutation_that_is_not_one_falls_back_to_the_queue_order() {
+        // Repeats and out-of-range entries used to be trusted as long as the
+        // length matched; the shared adapter rejects them instead.
+        let (w, playing) = play_window(&session(3, 1, Some(vec![0, 0, 2])), 1, 1);
+        assert_eq!(playing, Some(1));
+        assert_eq!(w, vec![(0, 0), (1, 1), (2, 2)]);
+    }
+
+    #[test]
+    fn a_permutation_with_out_of_range_entries_falls_back_too() {
+        let (w, playing) = play_window(&session(3, 2, Some(vec![0, 1, 9])), 0, 0);
+        assert_eq!(playing, Some(2));
+        assert_eq!(w, vec![(2, 2)]);
+    }
+
+    #[test]
+    fn window_bounds_survive_usize_max_before_and_after() {
+        // `before`/`after` come straight off the socket; the bounds math must
+        // saturate rather than overflow.
+        let (w, playing) = play_window(&session(3, 1, None), usize::MAX, usize::MAX);
+        assert_eq!(playing, Some(1));
+        assert_eq!(w, vec![(0, 0), (1, 1), (2, 2)]);
+    }
+
+    #[test]
+    fn a_cursor_past_the_end_is_nothing_playing() {
+        let (w, playing) = play_window(&session(5, 99, None), 3, 2);
         assert_eq!(playing, None);
         assert_eq!(w, vec![(0, 0), (1, 1)]);
     }

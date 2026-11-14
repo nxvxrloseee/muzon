@@ -143,6 +143,7 @@ pub fn run() {
         commands::theme::get_theme_source,
         commands::theme::set_theme_source,
         commands::theme::system_theme_available,
+        commands::theme::system_theme_path,
         commands::theme::get_default_theme,
         commands::theme::export_theme,
         commands::theme::import_theme,
@@ -263,7 +264,6 @@ pub fn run() {
             // Recolouring the desktop recolours the window: watch the shell's
             // palette while the user is following it
             let theme_handle = app.handle().clone();
-            let stop_handle = app.handle().clone();
             data::system_theme::watch(
                 move |theme| {
                     let state = theme_handle.state::<AppState>();
@@ -273,12 +273,9 @@ pub fn run() {
                     *state.theme.lock().unwrap() = theme.clone();
                     let _ = theme_handle.emit("theme-changed", theme);
                 },
-                move || {
-                    let state = stop_handle.state::<AppState>();
-                    // Only stops when the user leaves the system palette
-                    let following = *state.theme_source.lock().unwrap() == ThemeSource::System;
-                    !following
-                },
+                // Keep watching while manual mode is selected; the callback
+                // gates application, and switching back must work without restart.
+                || false,
             );
 
             // The window is `create: false` in tauri.conf.json and built here,

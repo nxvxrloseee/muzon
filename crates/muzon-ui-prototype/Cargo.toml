@@ -1,0 +1,37 @@
+[package]
+name = "muzon-ui-prototype"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Published stable Iced; the exact version is recorded in Cargo.lock. 0.14.0
+# already exists, but this prototype pins the mature 0.13.1 release whose API
+# (`iced::application`, `iced::time::every`, `scrollable`) was verified against
+# the official docs.rs documentation. `tokio` is required by
+# `iced::time::every` — the one-second playback-progress timer.
+iced = { version = "0.13.1", features = ["tokio", "image"] }
+# The shared queue bookkeeping: play order, navigation decisions and the
+# display order of the queue view all come from here and are never
+# reimplemented in the UI.
+muzon-queue = { path = "../muzon-queue" }
+
+muzon-core = { path = "../muzon-core" }
+muzon-services = {path="../muzon-services"}
+anyhow = "1"
+tokio = { version = "1", features = ["rt", "time"] }
+
+# Reuses the renderer's existing dependency for cached, font-independent icons.
+tiny-skia = "0.11.4"
+
+mpris-server = { version = "0.10.0", features = ["tokio"] }
+serde_json = "1"
+serde = {version="1",features=["derive"]}
+url = "2"
+tray-icon = { version = "=0.26.1", default-features = false, features = ["ksni"] }
+
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+
+[dev-dependencies]
+muzon-core = { path = "../muzon-core", features = ["test-support"] }
+
