@@ -2,9 +2,7 @@
 //! and debounced persistence, including edits pending when the window closes.
 use super::{message::Message, state::RealApp, style as st};
 use iced::{
-    widget::{
-        button, column, container, keyed_column, row, scrollable, slider, text, vertical_slider,
-    },
+    widget::{button, column, container, keyed_column, row, slider, text, vertical_slider},
     Alignment, Element, Length,
 };
 use muzon_core::{
@@ -303,17 +301,11 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
                     .on_press(Message::AudioSave),
             );
     }
-    scrollable(content.padding(iced::Padding {
-        right: 16.0,
-        ..Default::default()
-    }))
-    .direction(scrollable::Direction::Vertical(
-        scrollable::Scrollbar::new().width(6).scroller_width(6),
-    ))
-    .style(st::scroll)
-    .height(Length::Fill)
-    .width(Length::Fill)
-    .into()
+    st::scrollable(content)
+        .style(st::scroll)
+        .height(Length::Fill)
+        .width(Length::Fill)
+        .into()
 }
 
 #[cfg(test)]

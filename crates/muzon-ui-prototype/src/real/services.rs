@@ -1,9 +1,7 @@
 //! UI drafts for explicit account/storage actions. No credentials are serialized here.
 use super::{message::Message, state::RealApp, style as st};
 use iced::{
-    widget::{
-        button, checkbox, column, container, progress_bar, row, scrollable, text, text_input,
-    },
+    widget::{button, checkbox, column, container, progress_bar, row, text, text_input},
     Element, Length, Task,
 };
 use muzon_services::{
@@ -370,7 +368,7 @@ pub fn cloud(app: &RealApp) -> Element<'_, Message> {
                 .on_press(Message::ServiceCancel),
         );
     }
-    scrollable(content.width(Length::Fill))
+    st::scrollable(content.width(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(st::scroll)
@@ -451,7 +449,7 @@ pub fn scrobble(app: &RealApp) -> Element<'_, Message> {
         status("ListenBrainz",&s.status.listenbrainz),secret("Токен из профиля ListenBrainz",&s.token,2,enabled&&s.status.listenbrainz.user.is_none()),
         row![action("Подключить ListenBrainz",Action::ConnectListenBrainz,enabled&&s.status.listenbrainz.user.is_none()&&!s.token.0.trim().is_empty()),action("Отключить и очистить очередь",Action::DisconnectListenBrainz,enabled&&s.status.listenbrainz.user.is_some())].spacing(12),
         lastfm,action("Повторить отправку",Action::Retry,enabled),notice(s),text("Для хранения ключей нужен secret-tool (libsecret).\nСекреты изолированы по профилям и не записываются в JSON.").size(12).width(Length::Fill).shaping(iced::widget::text::Shaping::Advanced).color(st::muted())].spacing(20);
-    scrollable(content.width(Length::Fill))
+    st::scrollable(content.width(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(st::scroll)

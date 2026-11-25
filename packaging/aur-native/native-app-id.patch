@@ -1,0 +1,67 @@
+--- a/crates/muzon-ui-prototype/src/real/mod.rs
++++ b/crates/muzon-ui-prototype/src/real/mod.rs
+@@ -53,6 +53,11 @@
+             size,
+             transparent,
+             min_size: Some(iced::Size::new(800.0, 480.0)),
++            #[cfg(target_os = "linux")]
++            platform_specific: iced::window::settings::PlatformSpecific {
++                application_id: "muzon-native".into(),
++                ..Default::default()
++            },
+             ..Default::default()
+         })
+         .centered()
+--- a/crates/muzon-ui-prototype/src/demo/mod.rs
++++ b/crates/muzon-ui-prototype/src/demo/mod.rs
+@@ -12,7 +12,15 @@
+     iced::application("Muzon UI prototype", state::update, view::view)
+         .subscription(state::subscription)
+         .theme(|_| iced::theme::Theme::Dark)
+-        .window_size((1180.0, 760.0))
++        .window(iced::window::Settings {
++            size: iced::Size::new(1180.0, 760.0),
++            #[cfg(target_os = "linux")]
++            platform_specific: iced::window::settings::PlatformSpecific {
++                application_id: "muzon-native".into(),
++                ..Default::default()
++            },
++            ..Default::default()
++        })
+         .centered()
+         .resizable(true)
+         .run_with(|| (state::App::new(), iced::Task::none()))
+--- a/packaging/native/muzon-native.desktop
++++ b/packaging/native/muzon-native.desktop
+@@ -6,4 +6,4 @@
+ Icon=muzon-native
+ Terminal=false
+ Categories=AudioVideo;Audio;Player;
+-StartupWMClass=muzon-ui-prototype
++StartupWMClass=muzon-native
+--- a/crates/muzon-ui-prototype/src/cli.rs
++++ b/crates/muzon-ui-prototype/src/cli.rs
+@@ -53,10 +53,10 @@
+ Muzon — native player
+ 
+ Usage:
+-  muzon-ui-prototype --demo
++  muzon-native --demo
+       Synthetic library, simulated playback; nothing is read or written.
+ 
+-  muzon-ui-prototype --profile <DIR>
++  muzon-native --profile <DIR>
+       Real player. The database, session, playback settings and cover cache
+       all live inside <DIR>; nothing is read from an installed Muzon.
+ 
+@@ -64,8 +64,8 @@
+   -h, --help    Show this text.
+ 
+ Examples:
+-  muzon-ui-prototype --profile /tmp/muzon-profile
+-  muzon-ui-prototype --profile /tmp/muzon-native";
++  muzon-native --profile /tmp/muzon-profile
++  muzon-native --profile /tmp/muzon-native";
+ 
+ /// Parses the arguments after the program name.
+ ///

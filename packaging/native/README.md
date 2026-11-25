@@ -69,3 +69,16 @@ It verifies folder selection/cancel, scanning a path with spaces, thumbnail
 loading, settings categories, command palette, second-launch activation, window
 persistence and clean shutdown/reopen, and rejects unexpected credential access.
 It does not measure GPU performance or test authenticated cloud accounts.
+
+## Arch package
+
+A separate [PKGBUILD](../aur-native/PKGBUILD) builds and packages a pinned
+native-player source snapshot with makepkg:
+
+```sh
+cd packaging/aur-native
+makepkg -si
+```
+
+See [the Arch package instructions](../aur-native/README.md). The package is
+named `muzon-native` and can coexist with the Tauri package `muzon`.

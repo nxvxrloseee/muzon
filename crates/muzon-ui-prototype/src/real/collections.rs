@@ -8,9 +8,7 @@ use super::{
 };
 use crate::ui::{visible_window, ROW_HEIGHT};
 use iced::{
-    widget::{
-        button, column, container, row, scrollable, text, text_input, tooltip, vertical_space,
-    },
+    widget::{button, column, container, row, text, text_input, tooltip, vertical_space},
     Alignment, Element, Length,
 };
 use muzon_core::{controller::PlaylistEdit, domain::Track};
@@ -252,7 +250,7 @@ pub fn playlists(app: &RealApp) -> Element<'_, Message> {
         text("Плейлисты").size(30),
         create_form(app),
         row![
-            scrollable(list)
+            st::scrollable(list)
                 .height(Length::Fill)
                 .width(190)
                 .on_scroll(|v| Message::PlaylistListScrolled(v.absolute_offset().y)),
@@ -316,7 +314,7 @@ pub fn overlay(app: &RealApp) -> Option<Element<'_, Message>> {
             column![
                 text("Добавить в плейлист").size(22),
                 text(title).size(13).color(st::muted()),
-                scrollable(
+                st::scrollable(
                     choices.push(vertical_space().height((total - window.end) as f32 * ROW_HEIGHT))
                 )
                 .height(Length::Fixed(220.0))

@@ -64,7 +64,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
                 .width(Length::Fill)
                 .on_press(Message::Shortcut(super::shortcuts::Shortcut::Palette)),
             text("МЕДИАТЕКА").size(10).color(st::muted()),
-            scrollable(
+            st::scrollable(
                 column![
                     nav(app, Screen::Library, "Библиотека", Icon::Library),
                     nav(app, Screen::Albums, "Альбомы", Icon::Music),
@@ -290,7 +290,10 @@ fn library(app: &RealApp) -> Element<'_, Message> {
         .into()
     };
     content
-        .push(headings)
+        .push(container(headings).padding(iced::Padding {
+            right: st::SCROLL_GUTTER,
+            ..Default::default()
+        }))
         .push(library_rows(app))
         .height(Length::Fill)
         .into()
@@ -431,7 +434,7 @@ pub(super) fn library_rows(app: &RealApp) -> Element<'_, Message> {
         rows = rows.push(actions);
     }
     rows = rows.push(vertical_space().height((total - window.end) as f32 * ROW_HEIGHT));
-    scrollable(rows)
+    st::scrollable(rows)
         .id(scrollable::Id::new(LIBRARY_LIST))
         .on_scroll(|v| Message::LibraryScrolled(v.absolute_offset().y))
         .width(Length::Fill)
@@ -535,7 +538,7 @@ fn queue(app: &RealApp) -> Element<'_, Message> {
     rows = rows.push(vertical_space().height((total - window.end) as f32 * ROW_HEIGHT));
     column![
         controls,
-        scrollable(rows)
+        st::scrollable(rows)
             .id(scrollable::Id::new(QUEUE_LIST))
             .on_scroll(|v| Message::QueueScrolled(v.absolute_offset().y))
             .height(Length::Fill)
@@ -618,7 +621,7 @@ fn now_playing(app: &RealApp) -> Element<'_, Message> {
         }
         details = details.push(bars);
     }
-    let details = scrollable(container(details).padding(24).width(350).style(st::card))
+    let details = st::scrollable(container(details).padding(24).width(350).style(st::card))
         .width(350)
         .height(Length::Fill)
         .style(st::scroll);
@@ -653,7 +656,7 @@ fn now_playing(app: &RealApp) -> Element<'_, Message> {
     }
     row![
         details,
-        container(scrollable(lines).height(Length::Fill))
+        container(st::scrollable(lines).height(Length::Fill))
             .padding(28)
             .height(Length::Fill)
             .width(Length::Fill)

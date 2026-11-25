@@ -1,6 +1,6 @@
 use super::{message::Message, state::RealApp, style as st};
 use iced::{
-    widget::{button, column, row, scrollable, text},
+    widget::{button, column, row, text},
     Element, Length,
 };
 use muzon_core::sleep_timer::SleepChoice;
@@ -22,7 +22,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
                 .on_press(Message::SetSleep(SleepChoice::Minutes(minutes))),
         );
     }
-    scrollable(column![text("Таймер сна").size(28), text(label).size(17).color(st::accent()), presets,
+    st::scrollable(column![text("Таймер сна").size(28), text(label).size(17).color(st::accent()), presets,
         row![button("После текущего трека").padding([10,14]).style(st::secondary).on_press(Message::SetSleep(SleepChoice::EndOfTrack)),
             button("Отменить таймер").padding([10,14]).style(st::quiet).on_press(Message::SetSleep(SleepChoice::Off))].spacing(12),
         text("Таймер поставит музыку на паузу.\nРаботает и при скрытом окне; после перезапуска выключен.").size(13).width(Length::Fill).color(st::muted())

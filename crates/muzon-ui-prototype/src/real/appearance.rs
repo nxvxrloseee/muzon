@@ -1,7 +1,7 @@
 //! Native-only preferences. No desktop configuration is changed.
 use super::{message::Message, preferences::Store, state::RealApp, style as st};
 use iced::{
-    widget::{button, checkbox, column, row, scrollable, slider, text, text_input},
+    widget::{button, checkbox, column, row, slider, text, text_input},
     Element, Length,
 };
 use serde::{Deserialize, Serialize};
@@ -377,7 +377,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
     if let Some(error) = &appearance.error {
         content = content.push(text(error).size(12).color(iced::color!(0xff9696)));
     }
-    scrollable(content)
+    st::scrollable(content)
         .height(Length::Fill)
         .style(st::scroll)
         .into()

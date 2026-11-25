@@ -201,7 +201,7 @@ pub fn overlay(app: &RealApp) -> Option<Element<'_, Message>> {
         .style(st::input)
         .on_input(Message::PaletteQuery)
         .on_submit(Message::PaletteExecute),
-        scrollable(rows)
+        st::scrollable(rows)
             .id(scrollable::Id::new("muzon-palette-results"))
             .height(Length::Fill)
             .style(st::scroll),

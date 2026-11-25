@@ -1,0 +1,101 @@
+# Maintainer: nxvxrloseee
+pkgname=muzon-native
+pkgver=0.1.0.r32.gef59594
+pkgrel=2
+pkgdesc='Native Rust/Iced music player with GStreamer'
+arch=('x86_64')
+url='https://github.com/nxvxrloseee/muzon'
+license=('GPL-3.0-only')
+depends=(
+  'glibc'
+  'libgcc'
+  'bash'
+  'hicolor-icon-theme'
+  'glib2'
+  'gstreamer'
+  'gst-plugins-base'
+  'gst-plugins-good'
+  'gst-plugins-bad'
+  'gst-libav'
+  # Windowing/rendering and FileChooser libraries loaded at runtime.
+  'dbus'
+  'libx11'
+  'libxcursor'
+  'libxi'
+  'libxrandr'
+  'libxkbcommon'
+  'libxkbcommon-x11'
+  'wayland'
+  'vulkan-icd-loader'
+  'libglvnd'
+  'xdg-desktop-portal'
+)
+makedepends=('cargo' 'pkgconf')
+checkdepends=('python')
+optdepends=(
+  'libsecret: secure S3 keys and scrobbling credentials via secret-tool'
+  'xdg-desktop-portal-gtk: file chooser backend if the desktop has none'
+  'zenity: fallback native folder dialog'
+  'gst-plugins-ugly: additional audio codecs'
+  'vulkan-driver: GPU rendering through Vulkan'
+  'ttf-dejavu: fallback font for the native interface'
+  'python: import an existing library into a separate native profile'
+)
+# GCC LTO objects from bundled SQLite cannot be consumed by Rust's linker.
+options=('!lto')
+_commit=ef595947e29d0c8c041d7a39fdc00df2316b5644
+source=("$pkgname-$pkgver.tar.gz::$url/archive/$_commit.tar.gz"
+        "native-app-id.patch"
+        "native-scrollbars.patch")
+sha256sums=('edee3e1edec4c5b3fe3ae4d0d24bc4d1afcbe12ca903c07334702a908228072d'
+            'ad10bcddf8e0bd4fc9265f964bf8c1ca0810e1c46f54a042ab7722e6ee5e321f'
+            '2a77183cd46c5fa8f31d854ca1023170d347333316ec89de3eb8890898c61731')
+
+prepare() {
+  cd "$srcdir/muzon-$_commit"
+  patch -Np1 -i "$srcdir/native-app-id.patch"
+  patch -Np1 -i "$srcdir/native-scrollbars.patch"
+  local host
+  host=$(rustc -vV | sed -n 's/^host: //p')
+  # Standalone crates keep their own lockfiles; checks must remain offline too.
+  local crate
+  for crate in muzon-queue muzon-core muzon-services muzon-ui-prototype; do
+    cargo fetch --locked --target "$host" --manifest-path "crates/$crate/Cargo.toml"
+  done
+}
+
+build() {
+  cd "$srcdir/muzon-$_commit"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --frozen --release --manifest-path crates/muzon-ui-prototype/Cargo.toml
+}
+
+check() {
+  cd "$srcdir/muzon-$_commit"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  local crate
+  for crate in muzon-queue muzon-core muzon-services muzon-ui-prototype; do
+    cargo test --frozen --manifest-path "crates/$crate/Cargo.toml"
+  done
+  python packaging/native/test_launcher.py
+  python packaging/native/test_import_profile.py
+}
+
+package() {
+  cd "$srcdir/muzon-$_commit"
+  install -Dm755 "$srcdir/target/release/muzon-ui-prototype" \
+    "$pkgdir/usr/lib/muzon-native/muzon-native"
+  # Use Arch's /usr/lib layout, retaining the portable launcher's profile policy.
+  install -Dm755 packaging/native/muzon-native "$pkgdir/usr/bin/muzon-native"
+  sed -i 's|"$prefix/libexec/muzon-native"|"$prefix/lib/muzon-native/muzon-native"|' \
+    "$pkgdir/usr/bin/muzon-native"
+  install -Dm644 packaging/native/muzon-native.desktop \
+    "$pkgdir/usr/share/applications/muzon-native.desktop"
+  install -Dm644 src-tauri/icons/128x128.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/muzon-native.png"
+  install -Dm644 src-tauri/icons/128x128@2x.png \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/muzon-native.png"
+  install -Dm644 packaging/native/import_profile.py \
+    "$pkgdir/usr/share/muzon-native/tools/import_profile.py"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

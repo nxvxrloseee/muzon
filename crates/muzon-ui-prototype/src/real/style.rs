@@ -258,6 +258,23 @@ pub fn ambient(_: &Theme) -> container::Style {
     }
 }
 
+/// Dedicated rail space prevents the thumb from covering trailing row actions.
+pub const SCROLL_GUTTER: f32 = 16.;
+pub fn scrollable<'a, Message: 'a>(
+    content: impl Into<iced::Element<'a, Message>>,
+) -> iced::widget::Scrollable<'a, Message> {
+    use iced::widget::scrollable::{Direction, Scrollbar};
+    iced::widget::scrollable(content)
+        .direction(Direction::Vertical(
+            Scrollbar::new()
+                .width(6)
+                .scroller_width(6)
+                .margin(2)
+                .spacing(6),
+        ))
+        .style(scroll)
+}
+
 pub fn scroll(
     _: &Theme,
     status: iced::widget::scrollable::Status,

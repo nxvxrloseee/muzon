@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Owned Xvfb/private D-Bus only. No installed profiles, audio or real keyring.
-Usage: python3 tests/window_smoke.py /absolute/path/to/native-binary
+Usage: python3 tests/window_smoke.py /absolute/path/to/native-binary [--scrollbars]
+--scrollbars adds a 148-track visual test; requires ImageMagick and Pillow.
 Needs: dbus-run-session, xvfb-run, xwininfo, libX11, libXtst, Python dbus/gi.
 """
 import ctypes as c
@@ -19,7 +20,7 @@ import time
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3) or len(sys.argv) == 3 and sys.argv[2] != '--scrollbars':
         raise SystemExit(__doc__)
     binary = str(Path(sys.argv[1]).resolve(strict=True))
     root = Path(tempfile.mkdtemp(prefix="muzon-repo-smoke-"))
@@ -38,6 +39,10 @@ def main():
     tool.chmod(0o755)
     env["PATH"] = str(fakebin) + os.pathsep + env["PATH"]
     env["MUZON_TEST_KEYRING_SPY"] = str(spy)
+    if len(sys.argv) == 3:
+        env['MUZON_SMOKE_SCROLLBARS'] = '1'
+    else:
+        env.pop('MUZON_SMOKE_SCROLLBARS', None)
     result = sp.run(["dbus-run-session", "--", "xvfb-run", "-a", "-s",
                      "-screen 0 1400x900x24", sys.executable, __file__,
                      "--owned-worker", binary, str(root)], env=env)
@@ -109,7 +114,7 @@ def _worker(binary, root):
                     assert count('roots') == 0, 'cancel changed library roots'
                     command('folder')
                     deadline = time.monotonic() + 15
-                    while count('tracks') != 1:
+                    while count('tracks') != (148 if os.environ.get('MUZON_SMOKE_SCROLLBARS') else 1):
                         assert time.monotonic() < deadline, 'chosen folder was not scanned'
                         time.sleep(.1)
                     assert count('roots') == 1
@@ -119,6 +124,9 @@ def _worker(binary, root):
                     assert len(requests) == 2 and all(r['directory'] and not r['multiple'] for r in requests)
                     for query in ["albums", "cloud", "scrobble", "appearance", "shortcuts", "neverplayed"]:
                         command(query)
+                    if os.environ.get('MUZON_SMOKE_SCROLLBARS'):
+                        from scrollbar_probe import probe
+                        probe(x, xt, display, window, root, profile, command)
                     # Second invocation activates the first, without a second worker.
                     second = sp.run([binary, "--profile", str(profile)], stdout=log, stderr=log, timeout=10)
                     assert second.returncode == 0 and process.poll() is None
@@ -147,9 +155,21 @@ def worker(binary, root):
     root = Path(root)
     chosen = root / 'chosen music folder'
     chosen.mkdir()
-    with wave.open(str(chosen / 'Fixture.wav'), 'wb') as audio:
-        audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(8000)
-        audio.writeframes(b'\0' * 16000)
+    scrolling = bool(os.environ.get('MUZON_SMOKE_SCROLLBARS'))
+    for i in range(148 if scrolling else 1):
+        path = chosen / (f'Track {i:03}.wav' if scrolling else 'Fixture.wav')
+        with wave.open(str(path), 'wb') as audio:
+            audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(8000)
+            audio.writeframes(b'\0' * 48000)
+        if scrolling:
+            def info(kind, value):
+                payload=value.encode()+b'\0'
+                return kind+struct.pack('<I',len(payload))+payload+(b'\0' if len(payload)%2 else b'')
+            metadata=b'INFO'+info(b'IART',f'Artist {i:03}')+info(b'INAM',f'Track {i:03}')+info(b'IPRD',f'Album {i//10:02}')
+            raw=bytearray(path.read_bytes());raw.extend(b'LIST'+struct.pack('<I',len(metadata))+metadata)
+            raw[4:8]=struct.pack('<I',len(raw)-8);path.write_bytes(raw)
+    config=root/'profile/config';config.mkdir(parents=True)
+    (config/'session.json').write_text(json.dumps({'queuePaths':[],'shuffleOrder':[],'cursor':-1,'shuffle':False,'repeat':'off','positionSecs':0,'volume':0}))
     def chunk(kind, payload):
         return struct.pack('>I', len(payload)) + kind + payload + struct.pack('>I', zlib.crc32(kind + payload))
     png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 32, 32, 8, 2, 0, 0, 0))

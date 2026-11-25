@@ -140,7 +140,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
     }
     list =
         list.push(vertical_space().height((app.group_rows.len() - window.end) as f32 * ROW_HEIGHT));
-    let groups = scrollable(list)
+    let groups = st::scrollable(list)
         .id(scrollable::Id::new("muzon-groups"))
         .height(Length::Fill)
         .on_scroll(|v| Message::GroupsScrolled(v.absolute_offset().y));

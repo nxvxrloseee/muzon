@@ -2,7 +2,7 @@
 use super::{message::Message, shortcuts::Shortcut, state::RealApp, style as st};
 use iced::{
     keyboard::{key::Named, Key, Modifiers},
-    widget::{button, column, row, scrollable, text},
+    widget::{button, column, row, text},
     Element, Length,
 };
 use std::{
@@ -260,7 +260,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
     }
     content=content.push(row![button("Сбросить привязки").padding(10).style(st::secondary).on_press(Message::HotkeysReset),button("Сохранить").padding(10).style(st::quiet).on_press_maybe(hotkeys.dirty.then_some(Message::HotkeysSave))].spacing(12))
         .push(text("Ctrl+F — поиск, Ctrl+K — палитра команд. Эти сочетания и Escape зарезервированы. Привязки действуют внутри окна; ввод текста и ползунки имеют приоритет.").size(12).color(st::muted()));
-    scrollable(content)
+    st::scrollable(content)
         .style(st::scroll)
         .height(Length::Fill)
         .into()

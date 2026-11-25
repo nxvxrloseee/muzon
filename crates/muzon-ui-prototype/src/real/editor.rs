@@ -1,7 +1,7 @@
 //! Drafts stay local until explicit Save. Async answers carry an editor generation.
 use super::{message::Message, state::RealApp, style as st};
 use iced::{
-    widget::{button, checkbox, column, container, row, scrollable, text, text_editor, text_input},
+    widget::{button, checkbox, column, container, row, text, text_editor, text_input},
     Element, Length,
 };
 use muzon_core::{
@@ -168,7 +168,11 @@ pub fn overlay(app: &RealApp) -> Option<Element<'_, Message>> {
                 .spacing(4),
             );
         }
-        panel = panel.push(scrollable(fields).height(Length::Fill).style(st::scroll));
+        panel = panel.push(
+            st::scrollable(fields)
+                .height(Length::Fill)
+                .style(st::scroll),
+        );
     } else {
         let same = app.snapshot.current_path.as_deref() == Some(editor.source.track.path.as_str());
         panel=panel.push(row![

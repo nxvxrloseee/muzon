@@ -1,0 +1,332 @@
+diff --git a/crates/muzon-ui-prototype/src/real/album_grid.rs b/crates/muzon-ui-prototype/src/real/album_grid.rs
+index 75b603b..220804e 100644
+--- a/crates/muzon-ui-prototype/src/real/album_grid.rs
++++ b/crates/muzon-ui-prototype/src/real/album_grid.rs
+@@ -47,7 +47,7 @@ impl Grid {
+         }
+     }
+     pub fn columns(&self) -> usize {
+-        columns((self.viewport.width - 240. - 56. - 12.).max(1.))
++        columns((self.viewport.width - 240. - 56. - st::SCROLL_GUTTER).max(1.))
+     }
+     pub fn window(&self, offset: f32, total: usize) -> Range<usize> {
+         window(offset, total, self.columns(), self.viewport.height)
+@@ -206,7 +206,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
+     heading
+         .push(
+             container(
+-                scrollable(content)
++                st::scrollable(content)
+                     .id(scrollable::Id::new("muzon-groups"))
+                     .height(Length::Fill)
+                     .on_scroll(|v| Message::GroupsScrolled(v.absolute_offset().y))
+diff --git a/crates/muzon-ui-prototype/src/real/appearance.rs b/crates/muzon-ui-prototype/src/real/appearance.rs
+index 1a013c5..097f3e1 100644
+--- a/crates/muzon-ui-prototype/src/real/appearance.rs
++++ b/crates/muzon-ui-prototype/src/real/appearance.rs
+@@ -1,7 +1,7 @@
+ //! Native-only preferences. No desktop configuration is changed.
+ use super::{message::Message, preferences::Store, state::RealApp, style as st};
+ use iced::{
+-    widget::{button, checkbox, column, row, scrollable, slider, text, text_input},
++    widget::{button, checkbox, column, row, slider, text, text_input},
+     Element, Length,
+ };
+ use serde::{Deserialize, Serialize};
+@@ -377,7 +377,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
+     if let Some(error) = &appearance.error {
+         content = content.push(text(error).size(12).color(iced::color!(0xff9696)));
+     }
+-    scrollable(content)
++    st::scrollable(content)
+         .height(Length::Fill)
+         .style(st::scroll)
+         .into()
+diff --git a/crates/muzon-ui-prototype/src/real/audio_settings.rs b/crates/muzon-ui-prototype/src/real/audio_settings.rs
+index 90c90cc..9ec327b 100644
+--- a/crates/muzon-ui-prototype/src/real/audio_settings.rs
++++ b/crates/muzon-ui-prototype/src/real/audio_settings.rs
+@@ -2,9 +2,7 @@
+ //! and debounced persistence, including edits pending when the window closes.
+ use super::{message::Message, state::RealApp, style as st};
+ use iced::{
+-    widget::{
+-        button, column, container, keyed_column, row, scrollable, slider, text, vertical_slider,
+-    },
++    widget::{button, column, container, keyed_column, row, slider, text, vertical_slider},
+     Alignment, Element, Length,
+ };
+ use muzon_core::{
+@@ -303,17 +301,11 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
+                     .on_press(Message::AudioSave),
+             );
+     }
+-    scrollable(content.padding(iced::Padding {
+-        right: 16.0,
+-        ..Default::default()
+-    }))
+-    .direction(scrollable::Direction::Vertical(
+-        scrollable::Scrollbar::new().width(6).scroller_width(6),
+-    ))
+-    .style(st::scroll)
+-    .height(Length::Fill)
+-    .width(Length::Fill)
+-    .into()
++    st::scrollable(content)
++        .style(st::scroll)
++        .height(Length::Fill)
++        .width(Length::Fill)
++        .into()
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/muzon-ui-prototype/src/real/collections.rs b/crates/muzon-ui-prototype/src/real/collections.rs
+index 7d20b34..c1d9a92 100644
+--- a/crates/muzon-ui-prototype/src/real/collections.rs
++++ b/crates/muzon-ui-prototype/src/real/collections.rs
+@@ -8,9 +8,7 @@ use super::{
+ };
+ use crate::ui::{visible_window, ROW_HEIGHT};
+ use iced::{
+-    widget::{
+-        button, column, container, row, scrollable, text, text_input, tooltip, vertical_space,
+-    },
++    widget::{button, column, container, row, text, text_input, tooltip, vertical_space},
+     Alignment, Element, Length,
+ };
+ use muzon_core::{controller::PlaylistEdit, domain::Track};
+@@ -252,7 +250,7 @@ pub fn playlists(app: &RealApp) -> Element<'_, Message> {
+         text("Плейлисты").size(30),
+         create_form(app),
+         row![
+-            scrollable(list)
++            st::scrollable(list)
+                 .height(Length::Fill)
+                 .width(190)
+                 .on_scroll(|v| Message::PlaylistListScrolled(v.absolute_offset().y)),
+@@ -316,7 +314,7 @@ pub fn overlay(app: &RealApp) -> Option<Element<'_, Message>> {
+             column![
+                 text("Добавить в плейлист").size(22),
+                 text(title).size(13).color(st::muted()),
+-                scrollable(
++                st::scrollable(
+                     choices.push(vertical_space().height((total - window.end) as f32 * ROW_HEIGHT))
+                 )
+                 .height(Length::Fixed(220.0))
+diff --git a/crates/muzon-ui-prototype/src/real/editor.rs b/crates/muzon-ui-prototype/src/real/editor.rs
+index 6d46ab0..3573153 100644
+--- a/crates/muzon-ui-prototype/src/real/editor.rs
++++ b/crates/muzon-ui-prototype/src/real/editor.rs
+@@ -1,7 +1,7 @@
+ //! Drafts stay local until explicit Save. Async answers carry an editor generation.
+ use super::{message::Message, state::RealApp, style as st};
+ use iced::{
+-    widget::{button, checkbox, column, container, row, scrollable, text, text_editor, text_input},
++    widget::{button, checkbox, column, container, row, text, text_editor, text_input},
+     Element, Length,
+ };
+ use muzon_core::{
+@@ -168,7 +168,11 @@ pub fn overlay(app: &RealApp) -> Option<Element<'_, Message>> {
+                 .spacing(4),
+             );
+         }
+-        panel = panel.push(scrollable(fields).height(Length::Fill).style(st::scroll));
++        panel = panel.push(
++            st::scrollable(fields)
++                .height(Length::Fill)
++                .style(st::scroll),
++        );
+     } else {
+         let same = app.snapshot.current_path.as_deref() == Some(editor.source.track.path.as_str());
+         panel=panel.push(row![
+diff --git a/crates/muzon-ui-prototype/src/real/groups.rs b/crates/muzon-ui-prototype/src/real/groups.rs
+index 5eac9f7..b02ed4e 100644
+--- a/crates/muzon-ui-prototype/src/real/groups.rs
++++ b/crates/muzon-ui-prototype/src/real/groups.rs
+@@ -140,7 +140,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
+     }
+     list =
+         list.push(vertical_space().height((app.group_rows.len() - window.end) as f32 * ROW_HEIGHT));
+-    let groups = scrollable(list)
++    let groups = st::scrollable(list)
+         .id(scrollable::Id::new("muzon-groups"))
+         .height(Length::Fill)
+         .on_scroll(|v| Message::GroupsScrolled(v.absolute_offset().y));
+diff --git a/crates/muzon-ui-prototype/src/real/hotkeys.rs b/crates/muzon-ui-prototype/src/real/hotkeys.rs
+index 4563c38..7b096b3 100644
+--- a/crates/muzon-ui-prototype/src/real/hotkeys.rs
++++ b/crates/muzon-ui-prototype/src/real/hotkeys.rs
+@@ -2,7 +2,7 @@
+ use super::{message::Message, shortcuts::Shortcut, state::RealApp, style as st};
+ use iced::{
+     keyboard::{key::Named, Key, Modifiers},
+-    widget::{button, column, row, scrollable, text},
++    widget::{button, column, row, text},
+     Element, Length,
+ };
+ use std::{
+@@ -260,7 +260,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
+     }
+     content=content.push(row![button("Сбросить привязки").padding(10).style(st::secondary).on_press(Message::HotkeysReset),button("Сохранить").padding(10).style(st::quiet).on_press_maybe(hotkeys.dirty.then_some(Message::HotkeysSave))].spacing(12))
+         .push(text("Ctrl+F — поиск, Ctrl+K — палитра команд. Эти сочетания и Escape зарезервированы. Привязки действуют внутри окна; ввод текста и ползунки имеют приоритет.").size(12).color(st::muted()));
+-    scrollable(content)
++    st::scrollable(content)
+         .style(st::scroll)
+         .height(Length::Fill)
+         .into()
+diff --git a/crates/muzon-ui-prototype/src/real/palette.rs b/crates/muzon-ui-prototype/src/real/palette.rs
+index 5a4ee8b..37dda77 100644
+--- a/crates/muzon-ui-prototype/src/real/palette.rs
++++ b/crates/muzon-ui-prototype/src/real/palette.rs
+@@ -201,7 +201,7 @@ pub fn overlay(app: &RealApp) -> Option<Element<'_, Message>> {
+         .style(st::input)
+         .on_input(Message::PaletteQuery)
+         .on_submit(Message::PaletteExecute),
+-        scrollable(rows)
++        st::scrollable(rows)
+             .id(scrollable::Id::new("muzon-palette-results"))
+             .height(Length::Fill)
+             .style(st::scroll),
+diff --git a/crates/muzon-ui-prototype/src/real/services.rs b/crates/muzon-ui-prototype/src/real/services.rs
+index 0c70cbd..ac48916 100644
+--- a/crates/muzon-ui-prototype/src/real/services.rs
++++ b/crates/muzon-ui-prototype/src/real/services.rs
+@@ -1,9 +1,7 @@
+ //! UI drafts for explicit account/storage actions. No credentials are serialized here.
+ use super::{message::Message, state::RealApp, style as st};
+ use iced::{
+-    widget::{
+-        button, checkbox, column, container, progress_bar, row, scrollable, text, text_input,
+-    },
++    widget::{button, checkbox, column, container, progress_bar, row, text, text_input},
+     Element, Length, Task,
+ };
+ use muzon_services::{
+@@ -370,7 +368,7 @@ pub fn cloud(app: &RealApp) -> Element<'_, Message> {
+                 .on_press(Message::ServiceCancel),
+         );
+     }
+-    scrollable(content.width(Length::Fill))
++    st::scrollable(content.width(Length::Fill))
+         .width(Length::Fill)
+         .height(Length::Fill)
+         .style(st::scroll)
+@@ -451,7 +449,7 @@ pub fn scrobble(app: &RealApp) -> Element<'_, Message> {
+         status("ListenBrainz",&s.status.listenbrainz),secret("Токен из профиля ListenBrainz",&s.token,2,enabled&&s.status.listenbrainz.user.is_none()),
+         row![action("Подключить ListenBrainz",Action::ConnectListenBrainz,enabled&&s.status.listenbrainz.user.is_none()&&!s.token.0.trim().is_empty()),action("Отключить и очистить очередь",Action::DisconnectListenBrainz,enabled&&s.status.listenbrainz.user.is_some())].spacing(12),
+         lastfm,action("Повторить отправку",Action::Retry,enabled),notice(s),text("Для хранения ключей нужен secret-tool (libsecret).\nСекреты изолированы по профилям и не записываются в JSON.").size(12).width(Length::Fill).shaping(iced::widget::text::Shaping::Advanced).color(st::muted())].spacing(20);
+-    scrollable(content.width(Length::Fill))
++    st::scrollable(content.width(Length::Fill))
+         .width(Length::Fill)
+         .height(Length::Fill)
+         .style(st::scroll)
+diff --git a/crates/muzon-ui-prototype/src/real/sleep.rs b/crates/muzon-ui-prototype/src/real/sleep.rs
+index f0cff1e..40c7d53 100644
+--- a/crates/muzon-ui-prototype/src/real/sleep.rs
++++ b/crates/muzon-ui-prototype/src/real/sleep.rs
+@@ -1,6 +1,6 @@
+ use super::{message::Message, state::RealApp, style as st};
+ use iced::{
+-    widget::{button, column, row, scrollable, text},
++    widget::{button, column, row, text},
+     Element, Length,
+ };
+ use muzon_core::sleep_timer::SleepChoice;
+@@ -22,7 +22,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
+                 .on_press(Message::SetSleep(SleepChoice::Minutes(minutes))),
+         );
+     }
+-    scrollable(column![text("Таймер сна").size(28), text(label).size(17).color(st::accent()), presets,
++    st::scrollable(column![text("Таймер сна").size(28), text(label).size(17).color(st::accent()), presets,
+         row![button("После текущего трека").padding([10,14]).style(st::secondary).on_press(Message::SetSleep(SleepChoice::EndOfTrack)),
+             button("Отменить таймер").padding([10,14]).style(st::quiet).on_press(Message::SetSleep(SleepChoice::Off))].spacing(12),
+         text("Таймер поставит музыку на паузу.\nРаботает и при скрытом окне; после перезапуска выключен.").size(13).width(Length::Fill).color(st::muted())
+diff --git a/crates/muzon-ui-prototype/src/real/style.rs b/crates/muzon-ui-prototype/src/real/style.rs
+index 1d58d53..6e5ba20 100644
+--- a/crates/muzon-ui-prototype/src/real/style.rs
++++ b/crates/muzon-ui-prototype/src/real/style.rs
+@@ -258,6 +258,23 @@ pub fn ambient(_: &Theme) -> container::Style {
+     }
+ }
+ 
++/// Dedicated rail space prevents the thumb from covering trailing row actions.
++pub const SCROLL_GUTTER: f32 = 16.;
++pub fn scrollable<'a, Message: 'a>(
++    content: impl Into<iced::Element<'a, Message>>,
++) -> iced::widget::Scrollable<'a, Message> {
++    use iced::widget::scrollable::{Direction, Scrollbar};
++    iced::widget::scrollable(content)
++        .direction(Direction::Vertical(
++            Scrollbar::new()
++                .width(6)
++                .scroller_width(6)
++                .margin(2)
++                .spacing(6),
++        ))
++        .style(scroll)
++}
++
+ pub fn scroll(
+     _: &Theme,
+     status: iced::widget::scrollable::Status,
+diff --git a/crates/muzon-ui-prototype/src/real/view.rs b/crates/muzon-ui-prototype/src/real/view.rs
+index 8792b1d..9706720 100644
+--- a/crates/muzon-ui-prototype/src/real/view.rs
++++ b/crates/muzon-ui-prototype/src/real/view.rs
+@@ -64,7 +64,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
+                 .width(Length::Fill)
+                 .on_press(Message::Shortcut(super::shortcuts::Shortcut::Palette)),
+             text("МЕДИАТЕКА").size(10).color(st::muted()),
+-            scrollable(
++            st::scrollable(
+                 column![
+                     nav(app, Screen::Library, "Библиотека", Icon::Library),
+                     nav(app, Screen::Albums, "Альбомы", Icon::Music),
+@@ -290,7 +290,10 @@ fn library(app: &RealApp) -> Element<'_, Message> {
+         .into()
+     };
+     content
+-        .push(headings)
++        .push(container(headings).padding(iced::Padding {
++            right: st::SCROLL_GUTTER,
++            ..Default::default()
++        }))
+         .push(library_rows(app))
+         .height(Length::Fill)
+         .into()
+@@ -431,7 +434,7 @@ pub(super) fn library_rows(app: &RealApp) -> Element<'_, Message> {
+         rows = rows.push(actions);
+     }
+     rows = rows.push(vertical_space().height((total - window.end) as f32 * ROW_HEIGHT));
+-    scrollable(rows)
++    st::scrollable(rows)
+         .id(scrollable::Id::new(LIBRARY_LIST))
+         .on_scroll(|v| Message::LibraryScrolled(v.absolute_offset().y))
+         .width(Length::Fill)
+@@ -535,7 +538,7 @@ fn queue(app: &RealApp) -> Element<'_, Message> {
+     rows = rows.push(vertical_space().height((total - window.end) as f32 * ROW_HEIGHT));
+     column![
+         controls,
+-        scrollable(rows)
++        st::scrollable(rows)
+             .id(scrollable::Id::new(QUEUE_LIST))
+             .on_scroll(|v| Message::QueueScrolled(v.absolute_offset().y))
+             .height(Length::Fill)
+@@ -618,7 +621,7 @@ fn now_playing(app: &RealApp) -> Element<'_, Message> {
+         }
+         details = details.push(bars);
+     }
+-    let details = scrollable(container(details).padding(24).width(350).style(st::card))
++    let details = st::scrollable(container(details).padding(24).width(350).style(st::card))
+         .width(350)
+         .height(Length::Fill)
+         .style(st::scroll);
+@@ -653,7 +656,7 @@ fn now_playing(app: &RealApp) -> Element<'_, Message> {
+     }
+     row![
+         details,
+-        container(scrollable(lines).height(Length::Fill))
++        container(st::scrollable(lines).height(Length::Fill))
+             .padding(28)
+             .height(Length::Fill)
+             .width(Length::Fill)

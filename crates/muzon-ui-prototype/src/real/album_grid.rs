@@ -47,7 +47,7 @@ impl Grid {
         }
     }
     pub fn columns(&self) -> usize {
-        columns((self.viewport.width - 240. - 56. - 12.).max(1.))
+        columns((self.viewport.width - 240. - 56. - st::SCROLL_GUTTER).max(1.))
     }
     pub fn window(&self, offset: f32, total: usize) -> Range<usize> {
         window(offset, total, self.columns(), self.viewport.height)
@@ -206,7 +206,7 @@ pub fn view(app: &RealApp) -> Element<'_, Message> {
     heading
         .push(
             container(
-                scrollable(content)
+                st::scrollable(content)
                     .id(scrollable::Id::new("muzon-groups"))
                     .height(Length::Fill)
                     .on_scroll(|v| Message::GroupsScrolled(v.absolute_offset().y))
