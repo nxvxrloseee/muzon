@@ -5,6 +5,10 @@ use specta::Type;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackSettings {
+    #[serde(default)]
+    pub output_mode: OutputMode,
+    #[serde(default)]
+    pub output_device: Option<String>,
     /// 0 = gapless (no fade), > 0 = crossfade duration in seconds.
     pub crossfade_secs: f64,
     /// 10-band equalizer gains in dB, roughly -24..12 each.
@@ -13,6 +17,45 @@ pub struct PlaybackSettings {
     /// would fail to parse and take the EQ down with them.
     #[serde(default)]
     pub replay_gain: ReplayGainSettings,
+}
+
+/// Requested routing policy, never proof of sample identity at hardware.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum OutputMode {
+    #[default]
+    Normal,
+    BitPerfect,
+}
+
+/// Accept only direct ALSA PCM identifiers. Numeric card indexes are accepted
+/// for manual selection; enumeration prefers named CARD identifiers.
+pub fn validate_output_device(device: &str) -> Result<(), String> {
+    let Some(rest) = device.strip_prefix("hw:") else {
+        return Err("Требуется прямое ALSA-устройство hw:CARD=…,DEV=…".into());
+    };
+    let parts: Vec<_> = rest.split(',').collect();
+    let valid = if let [card, dev] = parts.as_slice() {
+        if let (Some(card), Some(dev)) = (card.strip_prefix("CARD="), dev.strip_prefix("DEV=")) {
+            !card.is_empty()
+                && card
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+                && !dev.is_empty()
+                && dev.bytes().all(|c| c.is_ascii_digit())
+        } else {
+            parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()))
+        }
+    } else {
+        false
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err("Некорректный идентификатор ALSA hw:".into())
+    }
 }
 
 pub const EQ_MIN_DB: f64 = -24.0;
@@ -29,12 +72,14 @@ pub enum PlaybackEdit {
     Crossfade(f64),
     ReplayGainMode(ReplayGainMode),
     Preamp(f64),
+    OutputMode(OutputMode),
+    OutputDevice(Option<String>),
     Reset,
 }
 impl PlaybackEdit {
     pub fn apply(&self, current: &PlaybackSettings) -> Result<PlaybackSettings, String> {
         let mut next = current.clone();
-        match *self {
+        match self.clone() {
             Self::EqBand { index, gain } => {
                 if !gain.is_finite() {
                     return Err("Усиление должно быть конечным числом".into());
@@ -63,6 +108,25 @@ impl PlaybackEdit {
                 }
                 next.replay_gain.preamp_db = db;
             }
+            Self::OutputMode(mode) => {
+                if mode == OutputMode::BitPerfect {
+                    validate_output_device(
+                        next.output_device
+                            .as_deref()
+                            .ok_or("Выберите ALSA-устройство")?,
+                    )?;
+                }
+                next.output_mode = mode;
+            }
+            Self::OutputDevice(device) => {
+                if let Some(id) = &device {
+                    validate_output_device(id)?;
+                }
+                if device.is_none() && next.output_mode == OutputMode::BitPerfect {
+                    return Err("Для BitPerfect требуется ALSA-устройство".into());
+                }
+                next.output_device = device;
+            }
             Self::Reset => next = PlaybackSettings::default_settings(),
         }
         Ok(next.normalized())
@@ -73,6 +137,8 @@ impl PlaybackSettings {
     pub fn normalized(&self) -> Self {
         let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
         Self {
+            output_mode: self.output_mode,
+            output_device: self.output_device.clone(),
             crossfade_secs: finite(self.crossfade_secs).clamp(0.0, MAX_CROSSFADE_SECS),
             eq_gains: self.eq_gains.map(|v| finite(v).clamp(EQ_MIN_DB, EQ_MAX_DB)),
             replay_gain: self.replay_gain.normalized(),
@@ -81,6 +147,8 @@ impl PlaybackSettings {
 
     pub fn default_settings() -> Self {
         Self {
+            output_mode: OutputMode::Normal,
+            output_device: None,
             crossfade_secs: 0.0,
             eq_gains: [0.0; EQ_BAND_COUNT],
             replay_gain: ReplayGainSettings::default(),
@@ -284,5 +352,50 @@ mod tests {
         .unwrap();
         assert_eq!(settings.crossfade_secs, MAX_CROSSFADE_SECS);
         assert_eq!(settings.eq_gains[0], EQ_MIN_DB);
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    #[test]
+    fn legacy_profiles_default_to_normal_and_round_trip_direct_settings() {
+        let old = r#"{"crossfadeSecs":0,"eqGains":[0,0,0,0,0,0,0,0,0,0]}"#;
+        let settings: PlaybackSettings = serde_json::from_str(old).unwrap();
+        assert_eq!(settings.output_mode, OutputMode::Normal);
+        assert_eq!(settings.output_device, None);
+        let settings = PlaybackEdit::OutputDevice(Some("hw:CARD=USB,DEV=0".into()))
+            .apply(&settings)
+            .unwrap();
+        let settings = PlaybackEdit::OutputMode(OutputMode::BitPerfect)
+            .apply(&settings)
+            .unwrap();
+        let json = serde_json::to_string(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PlaybackSettings>(&json).unwrap(),
+            settings
+        );
+        assert!(PlaybackEdit::OutputDevice(None).apply(&settings).is_err());
+    }
+    #[test]
+    fn only_direct_pcm_device_identifiers_are_accepted() {
+        for id in ["hw:0,0", "hw:CARD=USB_DAC,DEV=0"] {
+            assert!(validate_output_device(id).is_ok());
+        }
+        for id in [
+            "default",
+            "plughw:0,0",
+            "hw:",
+            "hw:CARD=,DEV=0",
+            "hw:0",
+            "hw:0,0\n",
+            "hw:CARD=USB,DEV=-1",
+            "hw:0,0,0",
+        ] {
+            assert!(validate_output_device(id).is_err(), "{id}");
+        }
+        assert!(PlaybackEdit::OutputMode(OutputMode::BitPerfect)
+            .apply(&PlaybackSettings::default_settings())
+            .is_err());
     }
 }

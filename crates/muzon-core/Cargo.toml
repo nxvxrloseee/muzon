@@ -18,7 +18,6 @@ anyhow = "1"
 # implementation is the same code the desktop app runs.
 gstreamer = "0.25"
 rusqlite = { version = "0.32", features = ["bundled"] }
-rusqlite_migration = "1"
 lofty = "0.22"
 walkdir = "2"
 rayon = "1"

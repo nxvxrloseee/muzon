@@ -1,8 +1,8 @@
 //! Mirroring the library to S3-compatible storage.
 //!
 //! Two directions, no deletions: what is missing on either side is copied, and
-//! nothing is ever removed. A mistake in a prefix or a bucket can then cost
-//! disk space, never music.
+//! differing existing objects are reported as conflicts; nothing is ever removed.
+//! A mistake in a prefix or a bucket can then cost disk space, never music.
 //!
 //! Layout under the configured prefix:
 //!
@@ -32,6 +32,10 @@ pub struct SyncOutcome {
     pub up_to_date: u32,
     pub bytes_up: f64,
     pub bytes_down: f64,
+    /// Existing object keys with differing content. Count with `conflicts.len()`.
+    /// Also included in failures for clients predating this field.
+    #[serde(default)]
+    pub conflicts: Vec<String>,
     /// Files that failed, with the reason - the rest of the sync still runs
     pub failures: Vec<String>,
 }
@@ -59,6 +63,7 @@ pub struct Plan {
     pub uploads: Vec<LocalFile>,
     pub downloads: Vec<(String, PathBuf, u64)>,
     pub up_to_date: u32,
+    pub comparisons: Vec<LocalFile>,
 }
 
 /// The key a local file gets: the name of its library folder, then the path
@@ -98,9 +103,9 @@ pub fn local_path_for(prefix: &str, key: &str, roots: &[PathBuf]) -> Option<Path
     .filter(|path| supported_file(path))
 }
 
-/// What to copy in each direction. Files are compared by size: S3 ETags stop
-/// being MD5 for multipart uploads, and re-hashing a library on every sync
-/// would cost more than it saves.
+/// Size and ETags cannot prove content equality (tags can change in place,
+/// and multipart/encrypted ETags are opaque). Existing keys require SHA-256
+/// comparison; differences are conflicts, never implicit replacements.
 pub fn plan(prefix: &str, local: &[LocalFile], remote: &[RemoteObject], roots: &[PathBuf]) -> Plan {
     let remote_by_key: HashMap<&str, &RemoteObject> =
         remote.iter().map(|o| (o.key.as_str(), o)).collect();
@@ -111,8 +116,8 @@ pub fn plan(prefix: &str, local: &[LocalFile], remote: &[RemoteObject], roots: &
 
     for file in local {
         match remote_by_key.get(file.key.as_str()) {
-            Some(obj) if obj.size == file.size => out.up_to_date += 1,
-            _ => out.uploads.push(file.clone()),
+            Some(_) => out.comparisons.push(file.clone()),
+            None => out.uploads.push(file.clone()),
         }
     }
 
@@ -130,6 +135,29 @@ pub fn plan(prefix: &str, local: &[LocalFile], remote: &[RemoteObject], roots: &
     }
 
     out
+}
+
+/// Hash asynchronously in bounded chunks, so cancellation can interrupt large files.
+async fn local_hash(path: &Path) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(hex::encode(hash.finalize()))
+}
+
+pub(super) async fn same_content(client: &S3Client, file: &LocalFile) -> anyhow::Result<bool> {
+    // Hash both sides rather than interpreting ETags as checksums. No manifest
+    // can become stale or be trusted after another client changes an object.
+    Ok(local_hash(&file.path).await? == client.content_hash(&file.key).await?)
 }
 
 // --- library snapshot -------------------------------------------------------
@@ -435,8 +463,40 @@ pub async fn run(
         ..Default::default()
     };
 
-    let total = (plan.uploads.len() + plan.downloads.len()) as u32;
+    let total = (plan.uploads.len() + plan.downloads.len() + plan.comparisons.len()) as u32;
     let mut done = 0;
+
+    for file in &plan.comparisons {
+        // Keep the native UI's existing comparison stage; unknown phase strings
+        // currently render as "finishing" in older clients.
+        progress(callback.as_ref(), "scan", done, total, &file.key);
+        match same_content(&client, file).await {
+            Ok(true) => outcome.up_to_date += 1,
+            Ok(false) => {
+                outcome.conflicts.push(file.key.clone());
+                outcome.failures.push(format!(
+                    "{}: content conflict; both copies preserved",
+                    file.key
+                ));
+            }
+            Err(error) => outcome
+                .failures
+                .push(format!("{}: comparison failed: {error}", file.key)),
+        }
+        done += 1;
+    }
+
+    if !outcome.conflicts.is_empty() {
+        // Existing UI displays the first ten failures: reserve the first line
+        // for a total so a large conflict set cannot look like a clean success.
+        outcome.failures.insert(
+            0,
+            format!(
+                "Конфликтов содержимого: {}. Копии сохранены; требуется ручное разрешение.",
+                outcome.conflicts.len()
+            ),
+        );
+    }
 
     for file in &plan.uploads {
         let name = file
@@ -445,7 +505,7 @@ pub async fn run(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         progress(callback.as_ref(), "upload", done, total, &name);
-        match client.put_file(&file.key, &file.path).await {
+        match client.put_file_if_absent(&file.key, &file.path).await {
             Ok(()) => {
                 outcome.uploaded += 1;
                 outcome.bytes_up += file.size as f64;
@@ -596,7 +656,8 @@ mod tests {
         ];
 
         let plan = plan("muzon/", &local, &remote, &roots);
-        assert_eq!(plan.up_to_date, 1);
+        assert_eq!(plan.up_to_date, 0);
+        assert_eq!(plan.comparisons.len(), 1);
         assert_eq!(plan.uploads.len(), 1);
         assert_eq!(plan.uploads[0].key, "muzon/tracks/Music/new.flac");
         assert_eq!(plan.downloads.len(), 1);
@@ -608,14 +669,15 @@ mod tests {
     }
 
     #[test]
-    fn a_file_of_a_different_size_is_uploaded_again() {
+    fn a_file_of_a_different_size_requires_comparison_without_overwrite() {
         let local = vec![LocalFile {
             path: "/m/a.flac".into(),
             key: "p/tracks/m/a.flac".into(),
             size: 120,
         }];
         let plan = plan("p/", &local, &[obj("p/tracks/m/a.flac", 100)], &[]);
-        assert_eq!(plan.uploads.len(), 1);
+        assert!(plan.uploads.is_empty());
+        assert_eq!(plan.comparisons.len(), 1);
         assert_eq!(plan.up_to_date, 0);
     }
 

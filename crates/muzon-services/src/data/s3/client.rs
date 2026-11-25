@@ -116,6 +116,19 @@ impl S3Client {
         body: Option<reqwest::Body>,
         length: Option<u64>,
     ) -> anyhow::Result<reqwest::Response> {
+        self.send_body_condition(method, key, query, body, length, false)
+            .await
+    }
+
+    async fn send_body_condition(
+        &self,
+        method: reqwest::Method,
+        key: &str,
+        query: &[(&str, String)],
+        body: Option<reqwest::Body>,
+        length: Option<u64>,
+        create_only: bool,
+    ) -> anyhow::Result<reqwest::Response> {
         let (url, host, path) = self.endpoint_for(key)?;
 
         // The canonical query string is sorted and encoded pair by pair
@@ -170,6 +183,9 @@ impl S3Client {
             req = req.body(body);
         }
 
+        if create_only {
+            req = req.header("if-none-match", "*");
+        }
         Ok(req.send().await?)
     }
 
@@ -246,6 +262,37 @@ impl S3Client {
         Self::check(response, &format!("не удалось загрузить {key}")).await?;
         Ok(())
     }
+    /// Fail closed if another client created the key after the listing.
+    pub async fn put_file_if_absent(&self, key: &str, path: &Path) -> anyhow::Result<()> {
+        let file = tokio::fs::File::open(path).await?;
+        let length = file.metadata().await?.len();
+        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
+        let response = self
+            .send_body_condition(
+                reqwest::Method::PUT,
+                key,
+                &[],
+                Some(body),
+                Some(length),
+                true,
+            )
+            .await?;
+        Self::check(response, &format!("create-only upload failed: {key}")).await?;
+        Ok(())
+    }
+
+    /// Opaque ETags are never used as content checksums. Stream even large audio.
+    pub async fn content_hash(&self, key: &str) -> anyhow::Result<String> {
+        use sha2::{Digest, Sha256};
+        let response = self.send(reqwest::Method::GET, key, &[], None).await?;
+        let mut response = Self::check(response, &format!("cannot compare {key}")).await?;
+        let mut hash = Sha256::new();
+        while let Some(chunk) = response.chunk().await? {
+            hash.update(&chunk);
+        }
+        Ok(hex::encode(hash.finalize()))
+    }
+
     async fn read_bounded(
         mut response: reqwest::Response,
         limit: usize,
@@ -626,6 +673,167 @@ mod roundtrip {
                 .unwrap()
                 .is_none());
         });
+    }
+
+    #[tokio::test]
+    async fn content_conflicts_and_create_races_preserve_both_copies() {
+        use crate::data::s3::sync::{self, LocalFile};
+        let server = FakeS3::start();
+        let client = server.client();
+        let dir = crate::testing::scratch_dir("s3-content-conflicts");
+        let path = dir.join("tagged.flac");
+        std::fs::write(&path, b"tag1audio").unwrap();
+        let file = LocalFile {
+            path: path.clone(),
+            key: "muzon/tracks/Music/tagged.flac".into(),
+            size: 9,
+        };
+        client.put_file_if_absent(&file.key, &path).await.unwrap();
+        assert!(sync::same_content(&client, &file).await.unwrap());
+        // A tag edit with exactly the same length must not be called up to date.
+        std::fs::write(&path, b"tag2audio").unwrap();
+        assert!(!sync::same_content(&client, &file).await.unwrap());
+        assert!(client.put_file_if_absent(&file.key, &path).await.is_err());
+        assert_eq!(
+            client.get_bytes(&file.key).await.unwrap().unwrap(),
+            b"tag1audio"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"tag2audio");
+        // Multipart-like/opaque ETag in the fake listing is irrelevant.
+        assert_eq!(client.list("muzon/").await.unwrap()[0].etag, "deadbeef");
+        client
+            .put_bytes(&file.key, b"remote-v3".to_vec())
+            .await
+            .unwrap();
+        assert!(!sync::same_content(&client, &file).await.unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"tag2audio");
+        assert!(client.content_hash("missing").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sync_reports_equal_size_changes_without_replacing_either_side() {
+        use crate::data::{
+            db::{Db, NewTrack},
+            s3::sync,
+        };
+        use std::sync::Arc;
+        let server = FakeS3::start();
+        let client = server.client();
+        let dir = crate::testing::scratch_dir("s3-sync-content");
+        let root = dir.join("Music");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("a.flac");
+        std::fs::write(&path, b"tag1audio").unwrap();
+        let db = Arc::new(Db::open(&dir.join("library.sqlite3")).unwrap());
+        db.add_root(&root).unwrap();
+        db.upsert_track(&NewTrack {
+            path: path.to_string_lossy().into_owned(),
+            title: "A".into(),
+            artist: None,
+            album: None,
+            duration_secs: None,
+            track_no: None,
+            genre: None,
+            year: None,
+            mtime: 0,
+        })
+        .unwrap();
+        let stages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = stages.clone();
+        let callback =
+            Arc::new(move |progress: sync::SyncProgress| captured.lock().unwrap().push(progress));
+        let run = || {
+            sync::run(
+                db.clone(),
+                client.cfg.clone(),
+                Credentials {
+                    access_key: "test".into(),
+                    secret_key: "test".into(),
+                    session_token: String::new(),
+                },
+                callback.clone(),
+                Arc::new(|| Ok(())),
+            )
+        };
+        let first = run().await.unwrap();
+        assert_eq!(first.uploaded, 1);
+        assert!(first.failures.is_empty());
+        let unchanged = run().await.unwrap();
+        assert_eq!(unchanged.up_to_date, 1);
+        assert_eq!(unchanged.uploaded, 0);
+        assert!(stages.lock().unwrap().iter().any(|p| p.phase == "scan"
+            && p.current == "muzon/tracks/Music/a.flac"
+            && p.total == 1));
+        std::fs::write(&path, b"tag2audio").unwrap();
+        let changed = run().await.unwrap();
+        assert_eq!(changed.uploaded, 0);
+        assert_eq!(changed.downloaded, 0);
+        assert_eq!(changed.up_to_date, 0);
+        assert_eq!(changed.conflicts, vec!["muzon/tracks/Music/a.flac"]);
+        assert_eq!(changed.failures.len(), 2);
+        assert!(changed.failures[0].contains("Конфликтов содержимого: 1"));
+        assert!(changed.failures[1].contains("content conflict"));
+        let key = "muzon/tracks/Music/a.flac";
+        assert_eq!(client.get_bytes(key).await.unwrap().unwrap(), b"tag1audio");
+        assert_eq!(std::fs::read(&path).unwrap(), b"tag2audio");
+        // Removing a local file never removes its remote counterpart.
+        std::fs::remove_file(&path).unwrap();
+        let restored = run().await.unwrap();
+        assert_eq!(restored.downloaded, 1);
+        assert_eq!(std::fs::read(&path).unwrap(), b"tag1audio");
+    }
+
+    #[tokio::test]
+    async fn cancelled_download_removes_partial_and_never_publishes_destination() {
+        use std::{
+            io::{Read, Write},
+            sync::mpsc,
+            time::Duration,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = [0; 8192];
+            assert!(stream.read(&mut buffer).unwrap() > 0);
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\npartial").unwrap();
+            seen_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        let client = S3Client::new(
+            S3Config {
+                endpoint,
+                bucket: "muzon".into(),
+                path_style: true,
+                ..Default::default()
+            },
+            Credentials {
+                access_key: "test".into(),
+                secret_key: "test".into(),
+                session_token: String::new(),
+            },
+        )
+        .unwrap();
+        let dir = crate::testing::scratch_dir("s3-download-cancel");
+        let dest = dir.join("a.flac");
+        let target = dest.clone();
+        let task = tokio::spawn(async move { client.get_file("a.flac", &target).await });
+        tokio::task::spawn_blocking(move || seen_rx.recv_timeout(Duration::from_secs(5)).unwrap())
+            .await
+            .unwrap();
+        assert!(!dest.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(!dest.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
     }
 
     #[test]

@@ -176,6 +176,53 @@ pub fn invalidate_thumbnail(cache_dir: &Path, track_path: &Path) {
     }
 }
 
+/// Dominant opaque RGB bucket from a tiny thumbnail; no per-frame image decoding.
+pub fn dominant_rgb(encoded: &[u8]) -> Option<[u8; 3]> {
+    let image = image::load_from_memory(encoded)
+        .ok()?
+        .thumbnail(24, 24)
+        .to_rgba8();
+    let mut buckets = [[0u32; 4]; 512];
+    for pixel in image.pixels().filter(|p| p[3] >= 128) {
+        let index = ((pixel[0] as usize >> 5) << 6)
+            | ((pixel[1] as usize >> 5) << 3)
+            | (pixel[2] as usize >> 5);
+        let bucket = &mut buckets[index];
+        bucket[0] += pixel[0] as u32;
+        bucket[1] += pixel[1] as u32;
+        bucket[2] += pixel[2] as u32;
+        bucket[3] += 1;
+    }
+    let bucket = buckets.iter().max_by_key(|b| b[3])?;
+    (bucket[3] > 0).then(|| {
+        [
+            (bucket[0] / bucket[3]) as u8,
+            (bucket[1] / bucket[3]) as u8,
+            (bucket[2] / bucket[3]) as u8,
+        ]
+    })
+}
+
+#[cfg(test)]
+mod dominant_tests {
+    use super::*;
+    #[test]
+    fn dominant_color_ignores_transparency_and_rejects_broken_images() {
+        let mut image = image::RgbaImage::from_pixel(24, 24, image::Rgba([220, 60, 80, 255]));
+        for x in 0..8 {
+            for y in 0..24 {
+                image.put_pixel(x, y, image::Rgba([0, 255, 0, 0]));
+            }
+        }
+        let mut bytes = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        assert_eq!(dominant_rgb(bytes.get_ref()), Some([220, 60, 80]));
+        assert_eq!(dominant_rgb(b"not an image"), None);
+    }
+}
+
 #[cfg(test)]
 mod cache_revision_tests {
     use super::*;

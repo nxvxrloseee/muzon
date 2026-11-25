@@ -57,6 +57,20 @@ impl PlaybackSettingsStore {
 mod tests {
     use super::*;
     #[test]
+    fn direct_output_settings_persist_without_changing_dsp_preferences() {
+        use crate::domain::playback_settings::OutputMode;
+        let dir = crate::testing::scratch_dir("direct-output-settings-store");
+        let store = PlaybackSettingsStore::new(&dir);
+        let mut settings = PlaybackSettings::default_settings();
+        settings.output_mode = OutputMode::BitPerfect;
+        settings.output_device = Some("hw:CARD=USB,DEV=0".into());
+        settings.crossfade_secs = 3.0;
+        settings.eq_gains[2] = -6.0;
+        store.save(&settings).unwrap();
+        assert_eq!(store.load_or_default(), settings);
+    }
+
+    #[test]
     fn atomic_replacement_does_not_leave_temporary_files_after_failure() {
         let dir = crate::testing::scratch_dir("audio-settings-atomic-replace");
         let store = PlaybackSettingsStore::new(&dir);

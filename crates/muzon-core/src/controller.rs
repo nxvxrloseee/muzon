@@ -29,6 +29,8 @@
 //! `muzon-queue`'s decisions. Nothing here re-implements them; the worker only
 //! executes what those functions answer.
 
+use crate::data::audio::output::{list_output_devices, OutputDevice, OutputStatus};
+use crate::domain::playback_settings::OutputMode;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -97,6 +99,8 @@ pub struct Media {
     pub track_path: Option<String>,
     /// Encoded image bytes (JPEG or PNG) for the cover, when the file has one.
     pub cover: Option<Arc<Vec<u8>>>,
+    /// Computed once off the audio/UI threads from the cached thumbnail.
+    pub dominant_color: Option<[u8; 3]>,
     pub lyrics: Vec<LrcLine>,
     /// True once loading finished for [`Media::track_path`] — including the
     /// "nothing found" outcome, which is not an error.
@@ -117,6 +121,8 @@ pub struct Snapshot {
     pub library: Arc<Vec<Track>>,
     pub playlists: Arc<Vec<Playlist>>,
     pub playback: Arc<PlaybackSettings>,
+    pub output_status: OutputStatus,
+    pub output_devices: Arc<Vec<OutputDevice>>,
     /// Preferences edited this run; metadata/search arrays stay immutable during drags.
     pub tempo_overrides: Arc<HashMap<i32, f64>>,
     pub audio_dirty: bool,
@@ -158,6 +164,8 @@ impl Snapshot {
             library: Arc::new(Vec::new()),
             playlists: Arc::new(Vec::new()),
             playback: Arc::new(PlaybackSettings::default_settings()),
+            output_status: OutputStatus::default(),
+            output_devices: Arc::new(Vec::new()),
             tempo_overrides: Arc::new(HashMap::new()),
             audio_dirty: false,
             audio_error: None,
@@ -241,6 +249,7 @@ pub(crate) enum Command {
     },
     Rescan,
     RefreshLibrary,
+    RefreshOutputDevices,
     /// Internal: a scan thread finished.
     ScanFinished(Result<ScanReport, String>),
     /// Replace the queue with tracks named by id, starting at `start_id` —
@@ -290,6 +299,7 @@ pub(crate) enum Command {
         generation: u64,
         path: String,
         cover: Option<(String, Vec<u8>)>,
+        dominant_color: Option<[u8; 3]>,
         lyrics: Option<Vec<LrcLine>>,
     },
     PlaylistEdit {
@@ -511,6 +521,11 @@ impl ControllerClient {
         self.send(Command::AddFolder(path));
     }
 
+    /// Rescan Audio/Sink devices on the worker. Call after hotplug or on opening settings.
+    pub fn refresh_output_devices(&self) {
+        self.send(Command::RefreshOutputDevices);
+    }
+
     pub fn refresh_library(&self) {
         self.send(Command::RefreshLibrary);
     }
@@ -700,6 +715,7 @@ struct Worker {
     library: Arc<Vec<Track>>,
     playlists: Arc<Vec<Playlist>>,
     playback: Arc<PlaybackSettings>,
+    output_devices: Arc<Vec<OutputDevice>>,
     tempo_overrides: Arc<HashMap<i32, f64>>,
     pending_tempos: HashMap<i32, f64>,
     playback_dirty: bool,
@@ -770,6 +786,7 @@ impl Worker {
             library: Arc::new(Vec::new()),
             playlists: Arc::new(Vec::new()),
             playback: Arc::new(PlaybackSettings::default_settings()),
+            output_devices: Arc::new(Vec::new()),
             tempo_overrides: Arc::new(HashMap::new()),
             pending_tempos: HashMap::new(),
             playback_dirty: false,
@@ -887,7 +904,7 @@ impl Worker {
             .spectrum_enabled
             .store(false, std::sync::atomic::Ordering::Release);
         self.player.set_spectrum_sink(None);
-        if self.current_path.is_some() {
+        if self.current_path.is_some() && !self.player.output_status().blocked {
             let status = self.player.status();
             self.position = status.position_secs;
             self.remember_progress();
@@ -968,6 +985,19 @@ impl Worker {
                 }
                 let _ = reply.send(result.map(|_| ()));
             }
+            Command::RefreshOutputDevices => match list_output_devices() {
+                Ok(devices) => {
+                    self.output_devices = Arc::new(devices);
+                    if self
+                        .audio_error
+                        .as_ref()
+                        .is_some_and(|e| e.starts_with("Audio devices:"))
+                    {
+                        self.audio_error = self.player.output_status().error;
+                    }
+                }
+                Err(error) => self.audio_error = Some(format!("Audio devices: {error}")),
+            },
             Command::Shutdown => return false,
             Command::PlaybackEdit(edit) => {
                 if let Err(error) = self.edit_playback(edit) {
@@ -1142,8 +1172,9 @@ impl Worker {
                 generation,
                 path,
                 cover,
+                dominant_color,
                 lyrics,
-            } => self.on_media_ready(generation, path, cover, lyrics),
+            } => self.on_media_ready(generation, path, cover, dominant_color, lyrics),
         }
         true
     }
@@ -1151,6 +1182,14 @@ impl Worker {
     // --- playback ----------------------------------------------------------
 
     fn apply_tick(&mut self, tick: PlaybackTick) {
+        if self.player.output_status().blocked {
+            self.playing = false;
+            if let Some(error) = tick.error {
+                self.on_playback_error(error);
+            }
+            self.remember_progress();
+            return;
+        }
         self.playing = tick.is_playing;
         self.position = tick.position_secs;
         if tick.duration_secs > 0.0 {
@@ -1249,6 +1288,12 @@ impl Worker {
     }
 
     fn on_playback_error(&mut self, error: PlaybackError) {
+        if error.fatal && self.player.output_status().mode == OutputMode::BitPerfect {
+            self.playing = false;
+            self.armed = None;
+            self.error = Some(format!("Direct ALSA output stopped: {}", error.message));
+            return;
+        }
         if !error.fatal {
             // Only the pre-roll died; the current track keeps playing and the
             // engine has already dropped the broken standby deck.
@@ -1272,6 +1317,15 @@ impl Worker {
 
     /// A file that could not be loaded or decoded. Skips on, but not forever.
     fn register_failure(&mut self, message: String) {
+        if self.player.output_status().mode == OutputMode::BitPerfect
+            || (self.playback.output_mode == OutputMode::BitPerfect
+                && self.player.output_status().error.is_some())
+        {
+            self.playing = false;
+            self.armed = None;
+            self.error = Some(message);
+            return;
+        }
         self.consecutive_failures += 1;
         if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
             self.consecutive_failures = 0;
@@ -1469,12 +1523,12 @@ impl Worker {
     }
 
     fn audio_edited(&mut self) {
-        self.audio_error = None;
+        self.audio_error = self.player.output_status().error;
         self.audio_save_at = Some(Instant::now() + Duration::from_millis(300));
     }
     fn edit_playback(&mut self, edit: PlaybackEdit) -> Result<(), String> {
         let next = edit.apply(&self.playback)?;
-        if *self.playback == next {
+        if *self.playback == next && self.player.output_status().error.is_none() {
             return Ok(());
         }
         // Apply only the affected properties; changing EQ must not re-arm a
@@ -1490,7 +1544,60 @@ impl Worker {
             PlaybackEdit::ReplayGainMode(_) | PlaybackEdit::Preamp(_) => {
                 self.player.set_replay_gain(next.replay_gain)
             }
+            PlaybackEdit::OutputMode(_) | PlaybackEdit::OutputDevice(_) => {
+                if let Err(error) = self
+                    .player
+                    .configure_output(next.output_mode, next.output_device.clone())
+                {
+                    self.playing = false;
+                    self.armed = None;
+                    return Err(error.to_string());
+                }
+                // A startup output failure still restores the logical session.
+                // Once output recovers, load that session paused rather than losing it.
+                if self.player.status().path.is_none() {
+                    if let Some(path) = self.current_path.as_deref() {
+                        self.player
+                            .load_paused_at(path, self.position)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                if self.error.as_ref().is_some_and(|error| {
+                    error.starts_with("Audio output:")
+                        || error.starts_with("Direct ALSA output stopped:")
+                }) {
+                    self.error = None;
+                }
+                // Deck state/position may have changed during reconfiguration.
+                let status = self.player.status();
+                self.playing = status.is_playing;
+                self.position = status.position_secs;
+                self.armed = None;
+                self.arm_next();
+                if next.output_mode == OutputMode::BitPerfect {
+                    *self.shared.spectrum.write().unwrap() = Arc::new(Vec::new());
+                }
+                if let Some(path) = self.current_path.as_deref() {
+                    if let Some(track) = self.shape.queue.iter().find(|t| t.path == path) {
+                        self.player.apply_tempo_for_path(
+                            path,
+                            self.tempo_overrides
+                                .get(&track.id)
+                                .copied()
+                                .unwrap_or(track.tempo),
+                        );
+                    }
+                }
+            }
             PlaybackEdit::Reset => {
+                if let Err(error) = self
+                    .player
+                    .configure_output(next.output_mode, next.output_device.clone())
+                {
+                    self.playing = false;
+                    self.armed = None;
+                    return Err(error.to_string());
+                }
                 self.player.set_equalizer_bands(next.eq_gains);
                 self.player.set_crossfade_seconds(next.crossfade_secs);
                 self.player.set_replay_gain(next.replay_gain);
@@ -1537,7 +1644,11 @@ impl Worker {
             }
             Ok(())
         })();
-        self.audio_error = result.as_ref().err().cloned();
+        self.audio_error = result
+            .as_ref()
+            .err()
+            .cloned()
+            .or_else(|| self.player.output_status().error);
         result
     }
 
@@ -1873,6 +1984,14 @@ impl Worker {
             .load_or_default()
             .normalized();
         self.playback = Arc::new(settings.clone());
+        if let Err(error) = self
+            .player
+            .configure_output(settings.output_mode, settings.output_device.clone())
+        {
+            self.audio_error = Some(error.to_string());
+            self.error = Some(format!("Audio output: {error}"));
+            // Output failure must not erase the restored queue or playhead.
+        }
         self.player.set_crossfade_seconds(settings.crossfade_secs);
         self.player.set_equalizer_bands(settings.eq_gains);
         self.player.set_replay_gain(settings.replay_gain);
@@ -1957,11 +2076,15 @@ impl Worker {
             let _guard = lock.lock().unwrap();
             let track_path = PathBuf::from(&path);
             let cover = covers::read_cover_thumbnail(&cover_dir, &track_path);
+            let dominant_color = cover
+                .as_ref()
+                .and_then(|(_, bytes)| covers::dominant_rgb(bytes));
             let lyrics = lrc_source::load_for_track(&track_path).map(|lyrics| lyrics.lines);
             let _ = tx.send(Command::MediaReady {
                 generation,
                 path,
                 cover,
+                dominant_color,
                 lyrics,
             });
         }));
@@ -1972,6 +2095,7 @@ impl Worker {
         generation: u64,
         path: String,
         cover: Option<(String, Vec<u8>)>,
+        dominant_color: Option<[u8; 3]>,
         lyrics: Option<Vec<LrcLine>>,
     ) {
         if generation != self.media_generation
@@ -1985,6 +2109,7 @@ impl Worker {
         let media = Media {
             track_path: Some(path),
             cover: cover.map(|(_, bytes)| Arc::new(bytes)),
+            dominant_color,
             lyrics: lyrics.unwrap_or_default(),
             loaded: true,
         };
@@ -2003,6 +2128,8 @@ impl Worker {
             library: Arc::clone(&self.library),
             playlists: Arc::clone(&self.playlists),
             playback: Arc::clone(&self.playback),
+            output_status: self.player.output_status(),
+            output_devices: Arc::clone(&self.output_devices),
             tempo_overrides: Arc::clone(&self.tempo_overrides),
             audio_dirty: self.playback_dirty || !self.pending_tempos.is_empty(),
             audio_error: self.audio_error.clone(),
@@ -2794,6 +2921,47 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_output_keeps_restored_queue_and_playhead() {
+        let _gst = gst_lock();
+        let dir = make_profile("controller-output-session-preserved");
+        scan_into(&dir, &[("a.wav", 4.)]);
+        let path = dir.join("music/a.wav").to_string_lossy().into_owned();
+        let store = SessionStore::new(&dir.join("config"));
+        store
+            .save(&crate::domain::session::Session {
+                queue_paths: vec![path.clone()],
+                shuffle_order: vec![0],
+                cursor: 0,
+                position_secs: 0.8,
+                ..Default::default()
+            })
+            .unwrap();
+        let mut settings = PlaybackSettings::default_settings();
+        settings.output_mode = OutputMode::BitPerfect; // Missing device; never opens hardware.
+        PlaybackSettingsStore::new(&dir.join("config"))
+            .save(&settings)
+            .unwrap();
+        let mut core = spawn(&dir).unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+        let snapshot = core.barrier().unwrap();
+        assert_eq!(snapshot.queue.len(), 1);
+        assert_eq!(snapshot.cursor, Some(0));
+        assert!((snapshot.position_secs - 0.8).abs() < 0.01);
+        assert!(snapshot.output_status.blocked);
+        core.shutdown();
+        assert_eq!(store.load_or_default().queue_paths, vec![path]);
+        assert!((store.load_or_default().position_secs - 0.8).abs() < 0.01);
+        let mut recovered = spawn(&dir).unwrap();
+        recovered.preview_playback(PlaybackEdit::OutputMode(OutputMode::Normal));
+        let snapshot = recovered.barrier().unwrap();
+        assert!(!snapshot.output_status.blocked);
+        assert!(snapshot.error.is_none());
+        assert!(!snapshot.is_playing);
+        assert!(snapshot.position_secs >= 0.7, "{}", snapshot.position_secs);
+        recovered.shutdown();
+    }
+
+    #[test]
     fn media_without_cover_or_lyrics_is_not_an_error() {
         let _gst = gst_lock();
         let dir = make_profile("controller-media");
@@ -3074,6 +3242,29 @@ mod tests {
             4.0
         );
     }
+    #[test]
+    fn successful_autosave_does_not_hide_failed_output_configuration() {
+        let _gst = gst_lock();
+        let dir = make_profile("controller-output-error-survives-save");
+        let mut settings = PlaybackSettings::default_settings();
+        settings.output_mode = OutputMode::BitPerfect;
+        // Intentionally missing address: exercises failure without opening any hardware.
+        PlaybackSettingsStore::new(&dir.join("config"))
+            .save(&settings)
+            .unwrap();
+        let mut core = spawn(&dir).unwrap();
+        assert!(core.snapshot().output_status.error.is_some());
+        core.preview_playback(PlaybackEdit::EqBand { index: 0, gain: 2. });
+        core.barrier().unwrap();
+        core.save_audio().unwrap();
+        let snapshot = core.barrier().unwrap();
+        assert!(snapshot.audio_error.is_some());
+        assert!(!snapshot.is_playing);
+        core.preview_playback(PlaybackEdit::OutputMode(OutputMode::Normal));
+        assert!(core.barrier().unwrap().audio_error.is_none());
+        core.shutdown();
+    }
+
     #[test]
     fn failed_audio_save_is_reported_and_can_be_retried() {
         let _gst = gst_lock();

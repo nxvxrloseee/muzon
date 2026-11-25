@@ -1,0 +1,92 @@
+# Maintainer: nxvxrloseee
+pkgname=muzon-native
+pkgver=0.2.0
+pkgrel=1
+pkgdesc='Native Rust/Iced music player with GStreamer'
+arch=('x86_64')
+url='https://github.com/nxvxrloseee/muzon'
+license=('GPL-3.0-only')
+depends=(
+  'glibc'
+  'libgcc'
+  'bash'
+  'hicolor-icon-theme'
+  'glib2'
+  'gstreamer'
+  'gst-plugins-base'
+  'gst-plugins-good'
+  'gst-plugins-bad'
+  'gst-libav'
+  # Windowing/rendering and FileChooser libraries loaded at runtime.
+  'dbus'
+  'libx11'
+  'libxcursor'
+  'libxi'
+  'libxrandr'
+  'libxkbcommon'
+  'libxkbcommon-x11'
+  'wayland'
+  'vulkan-icd-loader'
+  'libglvnd'
+  'xdg-desktop-portal'
+)
+makedepends=('cargo' 'pkgconf')
+checkdepends=('python')
+optdepends=(
+  'libsecret: secure S3 keys and scrobbling credentials via secret-tool'
+  'xdg-desktop-portal-gtk: file chooser backend if the desktop has none'
+  'zenity: fallback native folder dialog'
+  'gst-plugins-ugly: additional audio codecs'
+  'vulkan-driver: GPU rendering through Vulkan'
+  'alsa-utils: inspect ALSA hardware outputs for direct playback'
+  'python: import an existing library into a separate native profile'
+)
+# GCC LTO objects from bundled SQLite cannot be consumed by Rust's linker.
+options=('!lto')
+# Local tree recipe. Publish an AUR recipe only after a native release/tag exists.
+source=()
+sha256sums=()
+_project_root="$(cd -- "$startdir/../.." && pwd)"
+
+prepare() {
+  cd "$_project_root"
+  local host
+  host=$(rustc -vV | sed -n 's/^host: //p')
+  cargo fetch --locked --target "$host"
+}
+
+build() {
+  cd "$_project_root"
+  export CARGO_TARGET_DIR="$_project_root/target"
+  cargo build --frozen --release -p muzon-native
+}
+
+check() {
+  cd "$_project_root"
+  export CARGO_TARGET_DIR="$_project_root/target"
+  cargo test --frozen --workspace
+  python -m unittest discover -s crates/muzon-core/tests -p 'test_*.py'
+  python packaging/native/test_launcher.py
+  python packaging/native/test_import_profile.py
+}
+
+package() {
+  cd "$_project_root"
+  install -Dm755 "$_project_root/target/release/muzon-native" \
+    "$pkgdir/usr/lib/muzon-native/muzon-native"
+  # Use Arch's /usr/lib layout, retaining the portable launcher's profile policy.
+  install -Dm755 packaging/native/muzon-native "$pkgdir/usr/bin/muzon-native"
+  sed -i 's|"$prefix/libexec/muzon-native"|"$prefix/lib/muzon-native/muzon-native"|' \
+    "$pkgdir/usr/bin/muzon-native"
+  install -Dm644 packaging/native/muzon-native.desktop \
+    "$pkgdir/usr/share/applications/muzon-native.desktop"
+  install -Dm644 assets/icon-128.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/muzon-native.png"
+  install -Dm644 assets/icon-256.png \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/muzon-native.png"
+  install -Dm644 packaging/native/import_profile.py \
+    "$pkgdir/usr/share/muzon-native/tools/import_profile.py"
+  install -Dm644 crates/muzon-native/assets/fonts/LICENSE-NotoSans.txt \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE-NotoSans.txt"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

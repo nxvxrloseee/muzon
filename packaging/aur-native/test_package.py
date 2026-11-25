@@ -16,19 +16,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix='muzon-package-check-') as scratch:
         root = Path(scratch)
         subprocess.run(['bsdtar', '-xf', str(package), '-C', str(root)], check=True)
+        metadata = (root / '.PKGINFO').read_text()
+        package_name = next(line.split(' = ', 1)[1] for line in metadata.splitlines() if line.startswith('pkgname = '))
+        assert package_name in ('muzon-native', 'muzon-native-git'), package_name
         required = [
             'usr/bin/muzon-native', 'usr/lib/muzon-native/muzon-native',
             'usr/share/applications/muzon-native.desktop',
             'usr/share/icons/hicolor/128x128/apps/muzon-native.png',
             'usr/share/icons/hicolor/256x256/apps/muzon-native.png',
             'usr/share/muzon-native/tools/import_profile.py',
-            'usr/share/licenses/muzon-native/LICENSE',
+            f'usr/share/licenses/{package_name}/LICENSE',
         ]
         for name in required:
             assert (root / name).is_file(), name
         assert not (root / 'usr/bin/muzon').exists(), 'conflicts with the old shell'
-        metadata = (root / '.PKGINFO').read_text()
-        assert 'pkgname = muzon-native\n' in metadata
         assert not any('depend = ' + name + '\n' in metadata for name in ['nodejs', 'npm', 'webkit2gtk-4.1', 'tauri'])
         binary = root / 'usr/lib/muzon-native/muzon-native'
         launcher = root / 'usr/bin/muzon-native'

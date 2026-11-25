@@ -675,6 +675,48 @@ mod tests {
         assert_eq!(std::fs::read(&s.queue_path).unwrap(), before);
     }
     #[tokio::test]
+    async fn cancelling_in_flight_flush_keeps_durable_queue_for_restart() {
+        use std::io::{Read, Write};
+        use std::sync::mpsc;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            // A response is deliberately withheld until the client task has been joined.
+            let mut buffer = [0; 8192];
+            assert!(stream.read(&mut buffer).unwrap() > 0);
+            seen_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        });
+        let dir = scratch_dir("scrobble-cancel-restart");
+        let s = Arc::new(connected_to(&dir, &base));
+        s.try_listen(listen("pending")).unwrap();
+        let before = std::fs::read(&s.queue_path).unwrap();
+        let copy = s.clone();
+        let task = tokio::spawn(async move { copy.flush_all().await });
+        tokio::task::spawn_blocking(move || seen_rx.recv_timeout(Duration::from_secs(5)).unwrap())
+            .await
+            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(std::fs::read(&s.queue_path).unwrap(), before);
+        let reopened = Scrobbler::with_bases(&dir, "x", "x");
+        assert_eq!(
+            reopened.inner.lock().unwrap().queues.listenbrainz.front(),
+            Some(&listen("pending"))
+        );
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
     async fn in_flight_acknowledgement_does_not_remove_newer_eviction_replacement() {
         use std::io::{BufRead, BufReader, Read, Write};
         use std::sync::mpsc;

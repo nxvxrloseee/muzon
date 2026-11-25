@@ -59,8 +59,8 @@ Verification from the checkout:
 ```sh
 python3 packaging/native/test_launcher.py
 python3 packaging/native/test_import_profile.py
-python3 crates/muzon-ui-prototype/tests/window_smoke.py \
-  crates/muzon-ui-prototype/target/release/muzon-ui-prototype
+python3 crates/muzon-native/tests/window_smoke.py \
+  target/release/muzon-native
 ```
 
 The window test needs Python dbus and PyGObject (gi). It creates its own Xvfb,
@@ -72,13 +72,23 @@ It does not measure GPU performance or test authenticated cloud accounts.
 
 ## Arch package
 
-A separate [PKGBUILD](../aur-native/PKGBUILD) builds and packages a pinned
-native-player source snapshot with makepkg:
+A separate [PKGBUILD](../arch/PKGBUILD) builds and packages the current native
+workspace with makepkg:
 
 ```sh
-cd packaging/aur-native
+cd packaging/arch
 makepkg -si
 ```
 
-See [the Arch package instructions](../aur-native/README.md). The package is
+See [the Arch package instructions](../arch/README.md). The package is
 named `muzon-native` and can coexist with the Tauri package `muzon`.
+
+## Complete local acceptance command
+
+From the source checkout, `./packaging/native/verify.sh` checks Rust, Python,
+virtualized lists, real KSNI tray integration and private Wayland. Add `--gpu`
+for strict Vulkan hardware-renderer verification (software adapters fail), or
+`--loopback` for an already-loaded snd-aloop card and byte-level PCM comparison.
+A missing Loopback exits 77; it is not a passing audio verification. The runner
+never loads modules, suspends the machine, changes display settings, accesses
+installed profiles/account credentials, or performs Git operations.

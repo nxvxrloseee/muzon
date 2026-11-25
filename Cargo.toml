@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/muzon-queue",
+    "crates/muzon-core",
+    "crates/muzon-services",
+    "crates/muzon-native",
+]
+default-members = ["crates/muzon-native"]
+# The historical Tauri shell stays independently buildable.
+exclude = ["src-tauri"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

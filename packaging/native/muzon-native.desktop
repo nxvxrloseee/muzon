@@ -6,4 +6,4 @@ Exec=muzon-native
 Icon=muzon-native
 Terminal=false
 Categories=AudioVideo;Audio;Player;
-StartupWMClass=muzon-ui-prototype
+StartupWMClass=muzon-native

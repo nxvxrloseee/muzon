@@ -1,6 +1,7 @@
+use super::output::{sink_format, OutputStatus};
 use super::replay_gain::ReplayGain;
 use super::spectrum::{SpectrumSink, Visualizer};
-use crate::domain::playback_settings::ReplayGainSettings;
+use crate::domain::playback_settings::{validate_output_device, OutputMode, ReplayGainSettings};
 use gst::prelude::*;
 use gstreamer as gst;
 use serde::Serialize;
@@ -79,6 +80,11 @@ pub struct PlaybackStatus {
 /// cut (gapless) or a gradual volume ramp (crossfade) - the same mechanism
 /// either way, just a different fade duration.
 struct Deck {
+    filter: gst::Bin,
+    normal_flags: gst::glib::Value,
+    normal_sink: Option<gst::Element>,
+    direct: bool,
+    direct_sink: Option<gst::Element>,
     playbin: gst::Element,
     eq: gst::Element,
     pitch: gst::Element,
@@ -155,7 +161,14 @@ impl Deck {
             None
         });
 
+        let normal_flags = playbin.property_value("flags");
+        let normal_sink = playbin.property::<Option<gst::Element>>("audio-sink");
         Ok(Self {
+            filter: bin,
+            normal_flags,
+            normal_sink,
+            direct: false,
+            direct_sink: None,
             playbin,
             eq,
             pitch,
@@ -168,7 +181,14 @@ impl Deck {
 
     /// Volume on the perceptual scale, i.e. the number the slider shows.
     fn apply_volume(&self, cubic: f64) {
-        self.playbin.set_property("volume", cubic_to_linear(cubic));
+        self.playbin.set_property(
+            "volume",
+            if self.direct {
+                1.0
+            } else {
+                cubic_to_linear(cubic)
+            },
+        );
     }
 
     /// Volume as raw linear amplitude - what a crossfade has to work in, since
@@ -210,7 +230,25 @@ struct CrossfadeState {
     duration_secs: f64,
 }
 
+#[derive(Clone)]
+struct OutputRecovery {
+    path: Option<String>,
+    position: Option<gst::ClockTime>,
+    playing: bool,
+    loaded: bool,
+    next_path: Option<String>,
+}
+
 struct Inner {
+    requested_mode: OutputMode,
+    requested_device: Option<String>,
+    output_recovery: Option<OutputRecovery>,
+    output_mode: OutputMode,
+    output_device: Option<String>,
+    output_error: Option<String>,
+    output_blocked: bool,
+    replay_gain_settings: ReplayGainSettings,
+    spectrum_sink: Option<SpectrumSink>,
     deck_a: Deck,
     deck_b: Deck,
     active_is_a: bool,
@@ -264,6 +302,11 @@ impl Inner {
     /// always disarmed first, or flipping the slider mid-track would leave both
     /// a pre-rolled deck and an armed handler racing for the same transition.
     fn arm_next(&mut self) {
+        if self.output_blocked || self.output_mode == OutputMode::BitPerfect {
+            self.deck_a.disarm();
+            self.deck_b.disarm();
+            return;
+        }
         let crossfading = self.crossfade_secs > 0.0;
         let next = self.next_path.clone();
 
@@ -364,6 +407,15 @@ impl AudioPlayer {
 
         let visualizer = Visualizer::new();
         let inner = Inner {
+            requested_mode: OutputMode::Normal,
+            requested_device: None,
+            output_recovery: None,
+            output_mode: OutputMode::Normal,
+            output_device: None,
+            output_error: None,
+            output_blocked: false,
+            replay_gain_settings: ReplayGainSettings::default(),
+            spectrum_sink: None,
             deck_a: Deck::build(&visualizer, true)?,
             deck_b: Deck::build(&visualizer, false)?,
             visualizer,
@@ -382,8 +434,194 @@ impl AudioPlayer {
         })
     }
 
+    /// Reconfigure while stopped, then restore URI, position and playing/paused
+    /// state. On failure audio remains stopped and the error remains observable.
+    /// Call from the controller worker; preroll is bounded, never on the UI thread.
+    pub fn configure_output(&self, mode: OutputMode, device: Option<String>) -> anyhow::Result<()> {
+        let mut guard = self.inner.lock().unwrap();
+        if guard.output_mode == mode
+            && guard.output_device == device
+            && guard.output_error.is_none()
+        {
+            return Ok(());
+        }
+        guard.requested_mode = mode;
+        guard.requested_device = device.clone();
+        if guard.output_recovery.is_none() {
+            let p = &guard.active().playbin;
+            let (_, state, pending) = p.state(gst::ClockTime::ZERO);
+            guard.output_recovery = Some(OutputRecovery {
+                path: guard.current_path.clone(),
+                position: p.query_position::<gst::ClockTime>(),
+                playing: state == gst::State::Playing || pending == gst::State::Playing,
+                loaded: state >= gst::State::Paused || pending >= gst::State::Paused,
+                next_path: guard.next_path.clone(),
+            });
+        }
+        let recovery = guard.output_recovery.clone().expect("captured recovery");
+        let result = (|| -> anyhow::Result<()> {
+            if let Some(id) = &device {
+                validate_output_device(id).map_err(anyhow::Error::msg)?;
+            }
+            let sinks = if mode == OutputMode::BitPerfect {
+                let id = device
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Выберите прямое ALSA-устройство"))?;
+                let build = || -> anyhow::Result<(gst::Element, gst::Element)> {
+                    let sink = gst::ElementFactory::make("alsasink")
+                        .property("device", id)
+                        .property("provide-clock", true)
+                        .build()?;
+                    // No resampling or sample insertion/drop for clock slaving.
+                    sink.set_property_from_str("slave-method", "none");
+                    let filter = gst::ElementFactory::make("capsfilter")
+                        .property("caps", gst::Caps::builder("audio/x-raw").build())
+                        .build()?;
+                    let bin = gst::Bin::new();
+                    bin.add_many([&filter, &sink])?;
+                    filter.link(&sink)?;
+                    let pad = gst::GhostPad::with_target(
+                        &filter
+                            .static_pad("sink")
+                            .ok_or_else(|| anyhow::anyhow!("capsfilter missing sink pad"))?,
+                    )?;
+                    pad.set_active(true)?;
+                    bin.add_pad(&pad)?;
+                    Ok((bin.upcast(), sink))
+                };
+                Some([build()?, build()?])
+            } else {
+                None
+            };
+            let OutputRecovery {
+                path,
+                position,
+                playing,
+                loaded,
+                next_path: next,
+            } = recovery.clone();
+            guard.deck_a.disarm();
+            guard.deck_b.disarm();
+            guard.crossfade = None;
+            for deck in [&guard.deck_a, &guard.deck_b] {
+                deck.playbin.set_state(gst::State::Null)?;
+                deck.playbin.state(gst::ClockTime::from_seconds(5)).0?;
+                deck.flush_bus();
+            }
+            guard.output_mode = mode;
+            guard.output_device = device.clone();
+            let volume = guard.volume;
+            let rg = guard.replay_gain_settings;
+            let Inner { deck_a, deck_b, .. } = &mut *guard;
+            for (i, deck) in [deck_a, deck_b].into_iter().enumerate() {
+                deck.direct = mode == OutputMode::BitPerfect;
+                if let Some(sinks) = &sinks {
+                    deck.playbin
+                        .set_property("audio-filter", None::<gst::Element>);
+                    // GstPlayFlags are plugin-defined, hence use registered nicks.
+                    // native-audio suppresses playsink conversion/resampling;
+                    // omitting soft-volume also removes the software volume path.
+                    deck.playbin
+                        .set_property_from_str("flags", "audio+native-audio");
+                    deck.playbin.set_property("audio-sink", &sinks[i].0);
+                    deck.direct_sink = Some(sinks[i].1.clone());
+                    deck.replay_gain.set_settings(ReplayGainSettings::default());
+                } else {
+                    deck.direct_sink = None;
+                    deck.playbin
+                        .set_property_from_value("flags", &deck.normal_flags);
+                    deck.playbin.set_property("audio-filter", &deck.filter);
+                    deck.playbin.set_property("audio-sink", &deck.normal_sink);
+                    deck.replay_gain.set_settings(rg);
+                }
+                deck.apply_volume(volume);
+            }
+            let on = mode == OutputMode::Normal && guard.spectrum_sink.is_some();
+            guard.visualizer.set_sink(if on {
+                guard.spectrum_sink.clone()
+            } else {
+                None
+            });
+            guard.visualizer.enable_on(&guard.deck_a.spectrum, on);
+            guard.visualizer.enable_on(&guard.deck_b.spectrum, on);
+            if loaded {
+                if let Some(path) = path {
+                    let p = &guard.active().playbin;
+                    p.set_property("uri", path_to_uri(&path)?);
+                    p.set_state(gst::State::Paused)?;
+                    let (result, current, _) = p.state(gst::ClockTime::from_seconds(5));
+                    result?;
+                    anyhow::ensure!(current == gst::State::Paused, "Output preroll timed out");
+                    if let Some(pos) = position.filter(|p| *p > gst::ClockTime::ZERO) {
+                        p.seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, pos)?;
+                        p.state(gst::ClockTime::from_seconds(5)).0?;
+                    }
+                    if playing {
+                        p.set_state(gst::State::Playing)?;
+                    }
+                }
+            }
+            guard.next_path = next;
+            guard.last_position_secs = 0.0;
+            guard.output_blocked = false;
+            guard.arm_next();
+            Ok(())
+        })();
+        guard.output_blocked = result.is_err();
+        guard.output_error = result
+            .as_ref()
+            .err()
+            .map(|e| format!("Output configuration failed: {e}"));
+        if result.is_ok() {
+            guard.output_recovery = None;
+        }
+        if result.is_err() {
+            guard.crossfade = None;
+            guard.deck_a.disarm();
+            guard.deck_b.disarm();
+            for deck in [&guard.deck_a, &guard.deck_b] {
+                let _ = deck.playbin.set_state(gst::State::Null);
+            }
+        }
+        result
+    }
+
+    pub fn output_status(&self) -> OutputStatus {
+        let guard = self.inner.lock().unwrap();
+        let p = &guard.active().playbin;
+        let sink = guard
+            .active()
+            .direct_sink
+            .clone()
+            .or_else(|| p.property::<Option<gst::Element>>("audio-sink"));
+        let (_, state, _) = p.state(gst::ClockTime::ZERO);
+        let format = if state >= gst::State::Paused && guard.output_error.is_none() {
+            sink.as_ref()
+                .map(sink_format)
+                .transpose()
+                .map(Option::flatten)
+        } else {
+            Ok(None)
+        };
+        OutputStatus {
+            mode: guard.output_mode,
+            device: guard.output_device.clone(),
+            requested_mode: guard.requested_mode,
+            requested_device: guard.requested_device.clone(),
+            blocked: guard.output_blocked,
+            negotiated_format: format.as_ref().ok().cloned().flatten(),
+            bit_perfect_verified: false,
+            error: guard.output_error.clone().or_else(|| format.err()),
+        }
+    }
+
     pub fn load_and_play(&self, path: &str) -> anyhow::Result<()> {
         let mut guard = self.inner.lock().unwrap();
+        anyhow::ensure!(
+            !guard.output_blocked,
+            "Output configuration failed; reconfigure before playback"
+        );
+        guard.output_error = None;
         let standby = guard.standby_mut();
         standby.playbin.set_state(gst::State::Null).ok();
         standby.flush_bus();
@@ -403,9 +641,13 @@ impl AudioPlayer {
         deck.flush_bus();
         deck.playbin.set_property("uri", &uri);
         deck.apply_volume(volume);
-        deck.playbin.set_state(gst::State::Playing)?;
         deck.path = Some(path.to_string());
         guard.current_path = Some(path.to_string());
+        if let Err(error) = guard.active().playbin.set_state(gst::State::Playing) {
+            guard.output_error = Some(format!("Playback start failed: {error}"));
+            let _ = guard.active().playbin.set_state(gst::State::Null);
+            return Err(error.into());
+        }
         Ok(())
     }
 
@@ -418,6 +660,10 @@ impl AudioPlayer {
     /// simply fails - call it off the UI thread.
     pub fn load_paused_at(&self, path: &str, position_secs: f64) -> anyhow::Result<()> {
         let mut guard = self.inner.lock().unwrap();
+        anyhow::ensure!(
+            !guard.output_blocked,
+            "Output configuration failed; reconfigure before playback"
+        );
         let standby = guard.standby_mut();
         standby.playbin.set_state(gst::State::Null).ok();
         standby.flush_bus();
@@ -463,12 +709,20 @@ impl AudioPlayer {
 
     pub fn play(&self) -> anyhow::Result<()> {
         let guard = self.inner.lock().unwrap();
+        anyhow::ensure!(
+            !guard.output_blocked,
+            "Output configuration failed; reconfigure before playback"
+        );
         guard.active().playbin.set_state(gst::State::Playing)?;
         Ok(())
     }
 
     pub fn pause(&self) -> anyhow::Result<()> {
         let guard = self.inner.lock().unwrap();
+        anyhow::ensure!(
+            !guard.output_blocked,
+            "Output configuration failed; reconfigure before pause"
+        );
         guard.active().playbin.set_state(gst::State::Paused)?;
         Ok(())
     }
@@ -500,6 +754,7 @@ impl AudioPlayer {
 
     pub fn stop(&self) -> anyhow::Result<()> {
         let mut guard = self.inner.lock().unwrap();
+        guard.output_recovery = None;
         guard.deck_a.playbin.set_state(gst::State::Null).ok();
         guard.deck_b.playbin.set_state(gst::State::Null).ok();
         guard.deck_a.flush_bus();
@@ -553,7 +808,11 @@ impl AudioPlayer {
     /// Playback speed of the deck that's playing, for MPRIS's `Rate`.
     pub fn current_tempo(&self) -> f64 {
         let guard = self.inner.lock().unwrap();
-        guard.active().pitch.property::<f32>("tempo") as f64
+        if guard.output_mode == OutputMode::BitPerfect {
+            1.0
+        } else {
+            guard.active().pitch.property::<f32>("tempo") as f64
+        }
     }
 
     /// Points both decks at a fake sink, so tests can exercise real decoding
@@ -561,14 +820,16 @@ impl AudioPlayer {
     /// visible so the controller's tests drive the real engine too.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn use_fake_sinks(&self) -> anyhow::Result<()> {
-        let guard = self.inner.lock().unwrap();
-        for deck in [&guard.deck_a, &guard.deck_b] {
+        let mut guard = self.inner.lock().unwrap();
+        let Inner { deck_a, deck_b, .. } = &mut *guard;
+        for deck in [deck_a, deck_b] {
             let sink = gst::ElementFactory::make("fakesink")
                 // Honour timestamps, so a file of a known length still takes
                 // that long to play and transition timing stays meaningful.
                 .property("sync", true)
                 .build()?;
             deck.playbin.set_property("audio-sink", &sink);
+            deck.normal_sink = Some(sink);
         }
         Ok(())
     }
@@ -576,7 +837,13 @@ impl AudioPlayer {
     /// Starts (`Some`) or stops sending visualizer frames. Stopped, the
     /// spectrum elements post nothing.
     pub fn set_spectrum_sink(&self, sink: Option<SpectrumSink>) {
-        let guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap();
+        guard.spectrum_sink = sink.clone();
+        let sink = if guard.output_mode == OutputMode::BitPerfect {
+            None
+        } else {
+            sink
+        };
         let on = sink.is_some();
         guard.visualizer.set_sink(sink);
         guard.visualizer.enable_on(&guard.deck_a.spectrum, on);
@@ -584,7 +851,13 @@ impl AudioPlayer {
     }
 
     pub fn set_replay_gain(&self, settings: ReplayGainSettings) {
-        let guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap();
+        guard.replay_gain_settings = settings;
+        let settings = if guard.output_mode == OutputMode::BitPerfect {
+            ReplayGainSettings::default()
+        } else {
+            settings
+        };
         guard.deck_a.replay_gain.set_settings(settings);
         guard.deck_b.replay_gain.set_settings(settings);
     }
@@ -679,6 +952,7 @@ impl AudioPlayer {
             // fade into or out of, so tear the transition down and let the
             // frontend decide whether to skip on. A dead active deck outranks a
             // failed pre-load in the single slot a tick has for reporting.
+            guard.output_error = Some(message.clone());
             let path = guard.current_path.clone();
             active_playbin.set_state(gst::State::Null).ok();
             guard.crossfade = None;
@@ -719,7 +993,11 @@ impl AudioPlayer {
                 auto_advanced_to = new_path.clone();
                 eprintln!("[muzon audio] crossfade complete -> {new_path:?}");
             }
-        } else if guard.crossfade_secs > 0.0 && guard.next_path.is_some() {
+        } else if !guard.output_blocked
+            && guard.output_mode == OutputMode::Normal
+            && guard.crossfade_secs > 0.0
+            && guard.next_path.is_some()
+        {
             // Only crossfades are driven from here. A gapless transition needs
             // no window at all: playbin has already been handed the next URI
             // and joins the two streams itself.
@@ -821,6 +1099,155 @@ impl Drop for AudioPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_configuration_disables_processing_without_opening_hardware() {
+        let Some((_gst, player)) = locked_player() else {
+            return;
+        };
+        if gst::ElementFactory::find("alsasink").is_none() {
+            return;
+        }
+        player.set_volume(0.2).unwrap();
+        player.set_crossfade_seconds(4.0);
+        player
+            .configure_output(
+                OutputMode::BitPerfect,
+                Some("hw:CARD=MuzonTestNonexistent,DEV=0".into()),
+            )
+            .unwrap();
+        player.set_next_track(Some("/not/loaded.wav".into()));
+        player.set_volume(0.01).unwrap();
+        let guard = player.inner.lock().unwrap();
+        for deck in [&guard.deck_a, &guard.deck_b] {
+            assert_eq!(deck.playbin.state(gst::ClockTime::ZERO).1, gst::State::Null);
+            assert!(deck
+                .playbin
+                .property::<Option<gst::Element>>("audio-filter")
+                .is_none());
+            assert_eq!(deck.playbin.property::<f64>("volume"), 1.0);
+            assert_eq!(
+                deck.playbin
+                    .property_value("flags")
+                    .get::<Vec<&gst::glib::FlagsValue>>()
+                    .unwrap()
+                    .iter()
+                    .fold(0, |bits, flag| bits | flag.value()),
+                0x22
+            );
+            assert!(deck.next_uri.lock().unwrap().is_none());
+            let sink = deck.direct_sink.as_ref().unwrap();
+            assert_eq!(sink.factory().unwrap().name(), "alsasink");
+            assert_eq!(
+                sink.property_value("slave-method")
+                    .get::<&gst::glib::EnumValue>()
+                    .unwrap()
+                    .value(),
+                2
+            );
+        }
+        drop(guard);
+        assert!(!player.output_status().bit_perfect_verified);
+        assert!(player.output_status().negotiated_format.is_none());
+        player.configure_output(OutputMode::Normal, None).unwrap();
+        assert!(
+            (player
+                .inner
+                .lock()
+                .unwrap()
+                .active()
+                .playbin
+                .property::<f64>("volume")
+                - 0.000001)
+                .abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
+    fn rejected_output_is_visible_and_blocks_silent_playback_fallback() {
+        let Some((_gst, player)) = locked_player() else {
+            return;
+        };
+        assert!(player
+            .configure_output(OutputMode::BitPerfect, Some("default".into()))
+            .is_err());
+        assert!(player.output_status().error.is_some());
+        assert!(player.play().is_err());
+        assert!(player.load_and_play("/missing.wav").is_err());
+        player.configure_output(OutputMode::Normal, None).unwrap();
+        assert!(player.output_status().error.is_none());
+    }
+
+    #[test]
+    fn failed_output_keeps_resume_position_and_blocks_pause_and_preroll() {
+        let Some((_gst, player)) = locked_player() else {
+            return;
+        };
+        player.use_fake_sinks().unwrap();
+        let tone = write_tone("muzon-failed-output-recovery.wav", 3.0);
+        player.load_paused_at(tone.to_str().unwrap(), 0.7).unwrap();
+        assert!(player
+            .configure_output(OutputMode::BitPerfect, Some("default".into()))
+            .is_err());
+        assert!(player.pause().is_err());
+        player.set_crossfade_seconds(2.);
+        player.set_next_track(Some(tone.to_string_lossy().into_owned()));
+        {
+            let guard = player.inner.lock().unwrap();
+            for deck in [&guard.deck_a, &guard.deck_b] {
+                assert_eq!(deck.playbin.state(gst::ClockTime::ZERO).1, gst::State::Null);
+                assert!(deck.next_uri.lock().unwrap().is_none());
+            }
+        }
+        player.configure_output(OutputMode::Normal, None).unwrap();
+        let status = player.status();
+        assert!(!status.is_playing);
+        assert_eq!(status.path.as_deref(), tone.to_str());
+        assert!(status.position_secs >= 0.65, "{}", status.position_secs);
+        player.stop().unwrap();
+    }
+
+    #[test]
+    fn normal_output_reconfiguration_restores_paused_position() {
+        let Some((_gst, player)) = locked_player() else {
+            return;
+        };
+        player.use_fake_sinks().unwrap();
+        let tone = write_tone("muzon-output-restore.wav", 3.0);
+        player.load_paused_at(tone.to_str().unwrap(), 0.7).unwrap();
+        // Device preference changes in Normal do not route to hardware.
+        player
+            .configure_output(OutputMode::Normal, Some("hw:CARD=Unused,DEV=0".into()))
+            .unwrap();
+        let status = player.status();
+        assert!(!status.is_playing);
+        assert_eq!(status.path.as_deref(), tone.to_str());
+        assert!(status.position_secs >= 0.65, "{}", status.position_secs);
+        player.stop().unwrap();
+    }
+
+    #[test]
+    fn missing_file_reports_failure_and_a_later_track_can_play() {
+        let Some((_gst, player)) = locked_player() else {
+            return;
+        };
+        player.use_fake_sinks().unwrap();
+        let missing =
+            std::env::temp_dir().join(format!("muzon-disappeared-{}.wav", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        let immediate = player.load_and_play(missing.to_str().unwrap());
+        if immediate.is_ok() {
+            assert!(tick_until_error(&player, 80).is_some());
+        }
+        let tone = write_tone("muzon-after-disappeared.wav", 1.0);
+        player.load_and_play(tone.to_str().unwrap()).unwrap();
+        tick_until(&player, 160, |tick| {
+            tick.is_playing && tick.position_secs > 0.1 && tick.error.is_none()
+        })
+        .expect("recovery after missing disk/file");
+        player.stop().unwrap();
+    }
 
     /// Locks GStreamer and builds a player, or returns None when the machine
     /// has no usable GStreamer - these exercise real pipeline behaviour and

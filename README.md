@@ -1,20 +1,23 @@
 # Muzon
 
-Локальный музыкальный плеер для Linux. Tauri + Rust на бэкенде, React на фронте.
-
-Разрабатывается также [нативный интерфейс на Rust/Iced](crates/muzon-ui-prototype/README.md):
-воспроизведение через общий `muzon-core`, трей, MPRIS, сокет управления,
-наблюдение за библиотекой, очередь, избранное, плейлисты и умные подборки,
-редактор тегов/LRC с онлайн-поиском и простукиванием, темы, спектр,
-переназначаемые клавиши, S3 и офлайн-скробблинг. Для него нужен отдельный профиль:
+Локальный музыкальный плеер для Linux. Основная нативная сборка — Rust/Iced,
+GStreamer и SQLite, без WebView, Node.js и Tauri в зависимостях.
 
 ```bash
-cargo run --manifest-path crates/muzon-ui-prototype/Cargo.toml -- --profile /tmp/muzon-native
+cargo run --locked -p muzon-native -- --profile /tmp/muzon-native
+cargo test --locked --workspace
+./packaging/native/build.sh release
 ```
 
-Переносимая Linux-сборка и явный импорт старого профиля описаны в
-[packaging/native](packaging/native/README.md). Tauri-версия пока сохраняется
-параллельно; её описание ниже. Аудиодвижок и хранилища используются обеими оболочками.
+[Описание интерфейса](crates/muzon-native/README.md),
+[план и проверки миграции](docs/NATIVE_MIGRATION.md),
+[переносимая сборка и импорт профиля](packaging/native/README.md),
+[локальный PKGBUILD](packaging/arch/README.md).
+
+Четыре крейта входят в единый Cargo workspace и используют корневой `Cargo.lock`.
+Исторический интерфейс React/Tauri сохранён в `src/` и `src-tauri/`, исключён из
+workspace и собирается отдельно. Его описание и прежние команды ниже относятся
+к старой оболочке. Рабочий профиль автоматически не импортируется.
 
 Собирал под себя, потому что надоели все существующие варианты — либо жрут память,
 либо интерфейс из 2007-го, либо просто не то, что хотелось. Получилось примерно

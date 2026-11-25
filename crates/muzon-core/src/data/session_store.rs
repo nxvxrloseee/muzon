@@ -26,8 +26,20 @@ impl SessionStore {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&self.path, serde_json::to_string_pretty(session)?)?;
-        Ok(())
+        use std::io::Write;
+        let bytes = serde_json::to_vec_pretty(session)?;
+        let temporary = self.path.with_extension("json.tmp");
+        let result = (|| -> anyhow::Result<()> {
+            let mut file = std::fs::File::create(&temporary)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, &self.path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
     }
 }
 

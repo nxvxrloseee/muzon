@@ -58,6 +58,11 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length", 0))
         body = self.rfile.read(length)
         with lock:
+            if self.headers.get("if-none-match") == "*" and self._key() in objects:
+                self.send_response(412)
+                self.send_header("content-length", "0")
+                self.end_headers()
+                return
             objects[self._key()] = body
         self.send_response(200)
         self.send_header("content-length", "0")

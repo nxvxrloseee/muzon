@@ -86,7 +86,7 @@ impl Hub {
                     if stopping.load(Ordering::Acquire){
                         if let Some(task)=flusher.take(){task.abort();let _=task.await;}
                         if let Some(task)=now_playing.take(){task.abort();let _=task.await;}
-                        if let Err(error)=drain_outbox(&thread_db,&scrobble){*thread_error.lock().unwrap()=Some(error.to_string());}
+                        if let Err(error)=drain_all_outbox(&thread_db,&scrobble){*thread_error.lock().unwrap()=Some(error.to_string());}
                         break;
                     }
                     if flusher.as_ref().is_some_and(|task|task.is_finished()){
@@ -188,14 +188,19 @@ impl Hub {
         s3::creds::forget_with(self.vault.as_ref())
     }
     pub async fn check(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.cancel.is_cancelled(), "Сервисы остановлены");
         anyhow::ensure!(self.config().is_configured(), "Сначала настройте бакет");
         let vault = self.vault.clone();
-        let credentials =
-            tokio::task::spawn_blocking(move || s3::creds::load_with(vault.as_ref())).await??;
-        s3::client::S3Client::new(self.config(), credentials)?
-            .check_access()
-            .await
+        tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => anyhow::bail!("Сервисы остановлены"),
+            result = async {
+                let credentials = tokio::task::spawn_blocking(move || s3::creds::load_with(vault.as_ref())).await??;
+                s3::client::S3Client::new(self.config(), credentials)?.check_access().await
+            } => result,
+        }
     }
+
     pub fn progress(&self) -> Option<SyncProgress> {
         self.progress.lock().unwrap().clone()
     }
@@ -204,20 +209,37 @@ impl Hub {
             .sync_serial
             .try_lock()
             .map_err(|_| anyhow::anyhow!("Синхронизация уже выполняется"))?;
+        anyhow::ensure!(!self.cancel.is_cancelled(), "Сервисы остановлены");
         *self.progress.lock().unwrap() = None;
         let cfg = self.config();
         anyhow::ensure!(cfg.is_configured(), "Сначала настройте бакет");
         let vault = self.vault.clone();
-        let creds =
-            tokio::task::spawn_blocking(move || s3::creds::load_with(vault.as_ref())).await??;
+        let creds = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => anyhow::bail!("Сервисы остановлены"),
+            _ = cancel.cancelled() => anyhow::bail!("Синхронизация отменена"),
+            result = tokio::task::spawn_blocking(move || s3::creds::load_with(vault.as_ref())) => result??,
+        };
         anyhow::ensure!(!cancel.is_cancelled(), "Синхронизация отменена");
         let progress = self.progress.clone();
         let callback = Arc::new(move |value| *progress.lock().unwrap() = Some(value));
         let core = self.core.clone();
+        let shutdown = self.cancel.child_token();
+        // Dropping the sync future must also stop an already-started blocking scan waiter.
+        let _cancel_scan_on_drop = shutdown.clone().drop_guard();
+        let scan_cancel = cancel.clone();
         let scan = Arc::new(move || -> anyhow::Result<()> {
+            anyhow::ensure!(
+                !shutdown.is_cancelled() && !scan_cancel.is_cancelled(),
+                "Сканирование отменено"
+            );
             core.rescan();
             let deadline = Instant::now() + Duration::from_secs(120);
             loop {
+                anyhow::ensure!(
+                    !shutdown.is_cancelled() && !scan_cancel.is_cancelled(),
+                    "Сканирование отменено"
+                );
                 let snapshot = core.barrier().map_err(anyhow::Error::msg)?;
                 if !snapshot.scanning {
                     return Ok(());
@@ -229,7 +251,7 @@ impl Hub {
                 std::thread::sleep(Duration::from_millis(50));
             }
         });
-        let result = tokio::select! {_=cancel.cancelled()=>Err(anyhow::anyhow!("Синхронизация отменена")),result=s3::sync::run(self.db.clone(),cfg,creds,callback,scan)=>result};
+        let result = tokio::select! {biased; _=self.cancel.cancelled()=>Err(anyhow::anyhow!("Сервисы остановлены")), _=cancel.cancelled()=>Err(anyhow::anyhow!("Синхронизация отменена")),result=s3::sync::run(self.db.clone(),cfg,creds,callback,scan)=>result};
         self.core.refresh_library();
         result
     }
@@ -242,7 +264,10 @@ impl Hub {
         self.cancel.cancel();
         self.wake.notify_one();
         if let Some(worker) = self.worker.lock().unwrap().take() {
-            let _ = worker.join();
+            if worker.join().is_err() {
+                *self.error.lock().unwrap() =
+                    Some("Service worker panicked during shutdown".into());
+            }
         }
     }
 }
@@ -250,6 +275,12 @@ impl Drop for Hub {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+/// Shutdown must transfer every batch durably before joining. A failed write
+/// leaves the unacknowledged suffix in SQLite for the next launch.
+fn drain_all_outbox(db: &Db, scrobbler: &Scrobbler) -> anyhow::Result<()> {
+    while drain_outbox(db, scrobbler)? {}
+    Ok(())
 }
 fn drain_outbox(db: &Db, scrobbler: &Scrobbler) -> anyhow::Result<bool> {
     let pending = db.pending_listens(100)?;
@@ -305,8 +336,142 @@ mod tests {
         hub.shutdown();
         assert_eq!(vault.0.load(Ordering::SeqCst), 0);
         assert!(hub.error().is_none(), "{:?}", hub.error());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(runtime
+            .block_on(hub.sync(CancellationToken::new()))
+            .is_err());
+        assert_eq!(vault.0.load(Ordering::SeqCst), 0);
         core.shutdown();
     }
+    #[test]
+    fn shutdown_cancels_an_active_s3_request_and_joins_service_worker() {
+        // Serialize GStreamer users outside the executor rather than holding
+        // a synchronous guard inside an async test future.
+        let _gst = crate::testing::gst_lock();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                use std::{
+                    io::{Read, Write},
+                    sync::mpsc,
+                };
+                struct TestVault;
+                impl Vault for TestVault {
+                    fn lookup(&self, _: &str) -> Option<String> {
+                        Some("synthetic-test-value".into())
+                    }
+                    fn store(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+                        unreachable!()
+                    }
+                    fn clear(&self, _: &str) -> anyhow::Result<()> {
+                        unreachable!()
+                    }
+                }
+                let dir = crate::testing::scratch_dir("hub-active-s3-shutdown");
+                let root = dir.join("Music");
+                std::fs::create_dir_all(&root).unwrap();
+                let db = Arc::new(Db::open(&dir.join("muzon.sqlite3")).unwrap());
+                db.add_root(&root).unwrap();
+                let mut core = Controller::spawn_test(CoreConfig {
+                    db: db.clone(),
+                    session_store: SessionStore::new(&dir.join("config")),
+                    playback_settings_store: PlaybackSettingsStore::new(&dir.join("config")),
+                    cover_dir: dir.join("covers"),
+                })
+                .unwrap();
+                let hub = Arc::new(
+                    Hub::with_vault(&dir, db, core.client(), Arc::new(TestVault)).unwrap(),
+                );
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                hub.configure(S3Config {
+                    endpoint: format!("http://{}", listener.local_addr().unwrap()),
+                    bucket: "muzon".into(),
+                    path_style: true,
+                    ..Default::default()
+                })
+                .unwrap();
+                let (seen_tx, seen_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                let server = std::thread::spawn(move || {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut buffer = [0; 8192];
+                    assert!(stream.read(&mut buffer).unwrap() > 0);
+                    seen_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+                });
+                let copy = hub.clone();
+                let syncing =
+                    tokio::spawn(async move { copy.sync(CancellationToken::new()).await });
+                tokio::task::spawn_blocking(move || {
+                    seen_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+                })
+                .await
+                .unwrap();
+                hub.shutdown();
+                assert!(hub.worker.lock().unwrap().is_none());
+                let result = tokio::time::timeout(Duration::from_secs(2), syncing)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Сервисы остановлены"));
+                assert!(hub.error().is_none());
+                release_tx.send(()).unwrap();
+                server.join().unwrap();
+                core.shutdown();
+            });
+    }
+
+    #[test]
+    fn final_drain_transfers_more_than_one_batch_durably() {
+        use muzon_core::{data::db::NewTrack, domain::listen::Listen};
+        let dir = crate::testing::scratch_dir("services-final-drain");
+        let db = Db::open(&dir.join("muzon.sqlite3")).unwrap();
+        db.ensure_listen_outbox().unwrap();
+        db.upsert_track(&NewTrack {
+            path: "/a.wav".into(),
+            title: "A".into(),
+            artist: Some("Artist".into()),
+            album: None,
+            duration_secs: Some(100.),
+            track_no: None,
+            genre: None,
+            year: None,
+            mtime: 0,
+        })
+        .unwrap();
+        let track = db.list_tracks().unwrap().remove(0);
+        // Connected in a disposable profile, but no credential lookup or HTTP.
+        std::fs::write(
+            dir.join("scrobble.json"),
+            br#"{"listenbrainzUser":"test-user"}"#,
+        )
+        .unwrap();
+        let scrobbler = Scrobbler::with_vault(&dir, Arc::new(SpyVault::default()));
+        for i in 0..251 {
+            let listen = Listen::from_track(&track, i).unwrap();
+            db.record_play_and_queue(track.id, Some(&listen)).unwrap();
+        }
+        assert_eq!(db.pending_listens(1000).unwrap().len(), 251);
+        drain_all_outbox(&db, &scrobbler).unwrap();
+        assert!(db.pending_listens(1000).unwrap().is_empty());
+        assert_eq!(scrobbler.status().listenbrainz.pending, 251);
+        let reopened = Scrobbler::with_vault(&dir, Arc::new(SpyVault::default()));
+        assert_eq!(reopened.status().listenbrainz.pending, 251);
+        drain_all_outbox(&db, &scrobbler).unwrap();
+    }
+
     #[test]
     fn failed_handoff_keeps_the_durable_outbox_for_recovery() {
         use muzon_core::{data::db::NewTrack, domain::listen::Listen};
